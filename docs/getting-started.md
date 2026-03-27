@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through installing DuraLang and running your first durable agent.
+This guide gets you from install to first durable run fast.
 
 ---
 
@@ -30,51 +30,39 @@ temporal server start-dev
 
 ## Your First Durable Agent
 
+At the code level, the concept is simple: decorate your existing async LangChain agent function with `@dura`.
+
 ```python
-import asyncio
-from langchain_anthropic import ChatAnthropic
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import HumanMessage, ToolMessage
 from duralang import dura
 
-tools = [TavilySearchResults(max_results=3)]
-tools_by_name = {t.name: t for t in tools}
-
 @dura
-async def my_agent(messages: list) -> list:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-
-        if not response.tool_calls:
-            break
-
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(
-                content=str(result),
-                tool_call_id=tc["id"]
-            ))
-
-    return messages
-
-async def main():
-    result = await my_agent([
-        HumanMessage(content="What is the weather in NYC?")
-    ])
-    print(result[-1].content)
-
-asyncio.run(main())
+async def my_agent(messages):
+    # Your existing LangChain loop remains unchanged.
+    # llm.ainvoke(...), tool.ainvoke(...), mcp.call_tool(...)
+    ...
 ```
 
-This is **identical LangChain code**. The only addition is `@dura` on line 10.
+Then call it like a normal async function.
 
 ---
 
-## What Just Happened
+## Run A Complete Example
+
+Use one of the included examples for a full runnable script.
+
+```bash
+python examples/basic_agent.py
+```
+
+More examples:
+
+- `examples/multi_tool.py`
+- `examples/mcp_agent.py`
+- `examples/stochastic_agents.py`
+
+---
+
+## What Happens Under The Hood
 
 1. `@dura` wrapped your function
 2. When called, it started a Temporal Workflow

@@ -1,40 +1,33 @@
 # DuraLang Documentation
 
-Welcome to DuraLang — **write normal LangChain code, get Temporal durability with one decorator**.
+DuraLang lets you keep normal LangChain agent code while adding production durability through Temporal.
 
-DuraLang adds `@dura` to your existing LangChain agent. Every `llm.ainvoke()`, `tool.ainvoke()`, and `session.call_tool()` becomes a Temporal Activity — automatically retried, heartbeated, and visible in the Temporal UI. `@dura` functions calling other `@dura` functions become Temporal Child Workflows. `dura_agent_tool()` wraps sub-agents as real `BaseTool` instances — mixable with regular tools in the same `bind_tools()` call. Your code doesn't change.
+If you are new, start here: [Getting Started](getting-started.md)
 
----
+## Start By Goal
 
-## Quick Navigation
-
-| Topic | Description |
+| I want to... | Go here |
 |---|---|
-| [Getting Started](getting-started.md) | Install, prerequisites, first agent |
-| [Core Concepts](core-concepts.md) | How `@dura`, proxies, and context work |
-| [Configuration](configuration.md) | `DuraConfig`, `ActivityConfig` |
-| [Activities](activities.md) | `dura__llm`, `dura__tool`, `dura__mcp` |
-| [Tools & MCP](tools-and-mcp.md) | LangChain tools and MCP servers |
-| [Human-in-the-Loop](human-in-the-loop.md) | Temporal signals for human input |
-| [Error Handling](error-handling.md) | Retryable vs non-retryable errors |
-| [API Reference](api-reference.md) | `dura`, `DuraConfig`, `DuraMCPSession` |
-| [Examples](examples.md) | Working code examples |
-| [FAQ](faq.md) | Common questions |
+| Get my first durable run in minutes | [Getting Started](getting-started.md) |
+| Understand what `@dura` intercepts | [Core Concepts](core-concepts.md) |
+| Tune retries, timeouts, and worker settings | [Configuration](configuration.md) |
+| Use tools, MCP, and multi-agent patterns | [Tools & MCP](tools-and-mcp.md) |
+| Build human approval flows | [Human-in-the-Loop](human-in-the-loop.md) |
+| See concrete runnable samples | [Examples](examples.md) |
+| Debug failures and classify retryability | [Error Handling](error-handling.md) |
+| Look up APIs quickly | [API Reference](api-reference.md) |
 
----
+## Product Snapshot
 
-## The Entire API
+- One primary API: `@dura`
+- Optional multi-agent bridge: `dura_agent_tool()`
+- Three durable activity routes: `dura__llm`, `dura__tool`, `dura__mcp`
+- Child workflows when one `@dura` function calls another
 
-```python
-from duralang import dura, dura_agent_tool
+## Suggested Reading Order
 
-@dura
-async def my_agent(messages):
-    # your existing LangChain code here, unchanged
-    ...
-
-# Wrap @dura functions as tools for multi-agent orchestration
-agent_tool = dura_agent_tool(my_agent)
-
-result = await my_agent([HumanMessage(content="hello")])
-```
+1. [Getting Started](getting-started.md)
+2. [Core Concepts](core-concepts.md)
+3. [Configuration](configuration.md)
+4. [Tools & MCP](tools-and-mcp.md)
+5. [Examples](examples.md)
