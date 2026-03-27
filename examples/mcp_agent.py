@@ -1,4 +1,8 @@
-"""MCP agent — DuraMCPSession makes MCP calls durable."""
+"""MCP agent — DuraMCPSession makes MCP calls durable.
+
+Note: MCP tools are not standard LangChain tools, so they use
+DuraMCPSession for durable call_tool() instead of create_agent.
+"""
 
 import asyncio
 

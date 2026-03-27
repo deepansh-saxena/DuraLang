@@ -6,7 +6,7 @@ human input via Temporal Signals. Full implementation is planned for v2.
 
 import asyncio
 
-from langchain_anthropic import ChatAnthropic
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
 from duralang import dura
@@ -19,10 +19,12 @@ async def agent_with_confirmation(messages: list) -> list:
     In v2, this will use Temporal Signals to pause and wait for input.
     For now, this demonstrates the pattern.
     """
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    response = await llm.ainvoke(messages)
-    messages.append(response)
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        system_prompt="You are a helpful assistant that drafts content for review.",
+    )
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 
 
 async def main():

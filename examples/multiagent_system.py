@@ -9,8 +9,8 @@ see stochastic_agents.py.
 
 import asyncio
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from duralang import dura
@@ -64,119 +64,73 @@ def format_report(title: str, sections: str) -> str:
 
 # ── Agent: Researcher ────────────────────────────────────────────────────────
 
-research_tools = [web_search, wikipedia_lookup]
-research_tools_by_name = {t.name: t for t in research_tools}
-
 
 @dura
 async def researcher(topic: str) -> str:
     """Research agent — gathers information using web search and wikipedia."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(research_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are a research agent. Use web_search for current information "
-                "and wikipedia_lookup for background context. Gather comprehensive "
-                "information on the topic. Call BOTH tools to get a full picture."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[web_search, wikipedia_lookup],
+        system_prompt=(
+            "You are a research agent. Use web_search for current information "
+            "and wikipedia_lookup for background context. Gather comprehensive "
+            "information on the topic. Call BOTH tools to get a full picture."
         ),
-        HumanMessage(content=f"Research this topic thoroughly: {topic}"),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await research_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
+    )
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content=f"Research this topic thoroughly: {topic}")]}
+    )
+    return result["messages"][-1].content
 
 
 # ── Agent: Analyst ────────────────────────────────────────────────────────────
-
-analysis_tools = [calculator, code_interpreter]
-analysis_tools_by_name = {t.name: t for t in analysis_tools}
 
 
 @dura
 async def analyst(research_findings: str, question: str) -> str:
     """Analysis agent — processes research with calculations and code."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(analysis_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are an analyst. Given research findings, perform quantitative "
-                "analysis using the calculator and code_interpreter tools. "
-                "Extract key metrics, compute growth rates, and identify trends."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[calculator, code_interpreter],
+        system_prompt=(
+            "You are an analyst. Given research findings, perform quantitative "
+            "analysis using the calculator and code_interpreter tools. "
+            "Extract key metrics, compute growth rates, and identify trends."
         ),
-        HumanMessage(
-            content=(
-                f"Research findings:\n{research_findings}\n\n"
-                f"Analysis question: {question}"
-            )
-        ),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await analysis_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
+    )
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content=(
+            f"Research findings:\n{research_findings}\n\n"
+            f"Analysis question: {question}"
+        ))]}
+    )
+    return result["messages"][-1].content
 
 
 # ── Agent: Writer ─────────────────────────────────────────────────────────────
-
-writer_tools = [format_report]
-writer_tools_by_name = {t.name: t for t in writer_tools}
 
 
 @dura
 async def writer(research: str, analysis: str, topic: str) -> str:
     """Writer agent — combines research and analysis into a formatted report."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(writer_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are a technical writer. Combine the research findings and "
-                "analysis into a clear, well-structured report. Use the "
-                "format_report tool to produce the final output."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[format_report],
+        system_prompt=(
+            "You are a technical writer. Combine the research findings and "
+            "analysis into a clear, well-structured report. Use the "
+            "format_report tool to produce the final output."
         ),
-        HumanMessage(
-            content=(
-                f"Topic: {topic}\n\n"
-                f"Research findings:\n{research}\n\n"
-                f"Analysis:\n{analysis}\n\n"
-                f"Write a comprehensive report combining these inputs."
-            )
-        ),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await writer_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
+    )
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content=(
+            f"Topic: {topic}\n\n"
+            f"Research findings:\n{research}\n\n"
+            f"Analysis:\n{analysis}\n\n"
+            f"Write a comprehensive report combining these inputs."
+        ))]}
+    )
+    return result["messages"][-1].content
 
 
 # ── Pipeline agent — fixed sequence: research → analyze → write ──────────────

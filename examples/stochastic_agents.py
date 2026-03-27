@@ -1,7 +1,7 @@
 """Multi-agent with mixed tools — the LLM decides everything.
 
-This example shows DuraLang's full power: an agent that has both sub-agents
-and regular tools available. The LLM freely decides:
+This example shows DuraLang's full power: an orchestrator agent that has both
+sub-agents and regular tools available. The LLM freely decides:
   - Which agent or tool to call
   - How many times to call each
   - What order to call them in
@@ -11,15 +11,12 @@ Each sub-agent has its own tools and its own agent loop. Under the hood:
   - Regular @tool calls → Temporal Activity (single retryable operation)
   - dura_agent_tool() calls → Temporal Child Workflow (own event history)
   - LLM calls → Temporal Activity (retried, heartbeated)
-
-The dispatch loop is identical for all tool types — DuraLang routes
-each call to the right Temporal primitive automatically.
 """
 
 import asyncio
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from duralang import dura, dura_agent_tool
@@ -67,104 +64,56 @@ def format_document(title: str, body: str) -> str:
 
 # ── Sub-agents (each becomes a Child Workflow when called) ───────────────────
 
-research_tools = [web_search, wikipedia_lookup]
-research_tools_by_name = {t.name: t for t in research_tools}
-
 
 @dura
 async def researcher(query: str) -> str:
     """Research agent — gathers information via web search and wikipedia."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(research_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are a research agent. Use web_search for current info and "
-                "wikipedia_lookup for background. Gather what's needed to answer "
-                "the query, then return a clear summary. Be concise."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[web_search, wikipedia_lookup],
+        system_prompt=(
+            "You are a research agent. Use web_search for current info and "
+            "wikipedia_lookup for background. Gather what's needed to answer "
+            "the query, then return a clear summary. Be concise."
         ),
-        HumanMessage(content=query),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await research_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
-
-
-analysis_tools = [calculator]
-analysis_tools_by_name = {t.name: t for t in analysis_tools}
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=query)]})
+    return result["messages"][-1].content
 
 
 @dura
 async def analyst(data: str, question: str) -> str:
     """Analysis agent — analyzes data with calculations and trend identification."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(analysis_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are an analyst. Given data and a question, provide quantitative "
-                "and qualitative analysis. Use the calculator for any math. Be concise."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[calculator],
+        system_prompt=(
+            "You are an analyst. Given data and a question, provide quantitative "
+            "and qualitative analysis. Use the calculator for any math. Be concise."
         ),
-        HumanMessage(content=f"Data:\n{data}\n\nQuestion: {question}"),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await analysis_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
-
-
-writer_tools = [format_document]
-writer_tools_by_name = {t.name: t for t in writer_tools}
+    )
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content=f"Data:\n{data}\n\nQuestion: {question}")]}
+    )
+    return result["messages"][-1].content
 
 
 @dura
 async def writer(content: str, instructions: str) -> str:
     """Writer agent — produces formatted, polished documents."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(writer_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You are a writer. Take the provided content and instructions, "
-                "then produce a well-written output. Use format_document to "
-                "create a clean final document. Be concise."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[format_document],
+        system_prompt=(
+            "You are a writer. Take the provided content and instructions, "
+            "then produce a well-written output. Use format_document to "
+            "create a clean final document. Be concise."
         ),
-        HumanMessage(
-            content=f"Content:\n{content}\n\nInstructions: {instructions}"
-        ),
-    ]
-
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await writer_tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return response.content
+    )
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content=f"Content:\n{content}\n\nInstructions: {instructions}")]}
+    )
+    return result["messages"][-1].content
 
 
 # ── Orchestrator — sub-agents and regular tools in one list ───────────────────
@@ -175,7 +124,6 @@ all_tools = [
     dura_agent_tool(writer),           # → Temporal Child Workflow
     calculator,                         # → Temporal Activity
 ]
-tools_by_name = {t.name: t for t in all_tools}
 
 
 @dura
@@ -186,40 +134,21 @@ async def orchestrator(task: str) -> str:
     individually durable: LLM calls, tool calls, and agent calls are all
     Temporal Activities or Child Workflows with automatic retry.
     """
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-
-    messages = [
-        SystemMessage(
-            content=(
-                "You have access to specialist agents and tools:\n"
-                "- call_researcher: gathers information (web search, wikipedia)\n"
-                "- call_analyst: analyzes data (calculations, trends)\n"
-                "- call_writer: produces formatted documents\n"
-                "- calculator: evaluate math expressions directly\n\n"
-                "Use them in whatever order makes sense. Call agents multiple "
-                "times if needed. When you have enough, give your final answer."
-            )
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,
+        system_prompt=(
+            "You have access to specialist agents and tools:\n"
+            "- call_researcher: gathers information (web search, wikipedia)\n"
+            "- call_analyst: analyzes data (calculations, trends)\n"
+            "- call_writer: produces formatted documents\n"
+            "- calculator: evaluate math expressions directly\n\n"
+            "Use them in whatever order makes sense. Call agents multiple "
+            "times if needed. When you have enough, give your final answer."
         ),
-        HumanMessage(content=task),
-    ]
-
-    for i in range(20):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-
-        if not response.tool_calls:
-            break
-
-        for tc in response.tool_calls:
-            print(f"  → Calling: {tc['name']}")
-            # Same ainvoke() for both sub-agents and regular tools
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(
-                ToolMessage(content=str(result), tool_call_id=tc["id"])
-            )
-
-    return response.content
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+    return result["messages"][-1].content
 
 
 # ── Run ──────────────────────────────────────────────────────────────────────

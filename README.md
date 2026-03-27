@@ -43,26 +43,20 @@ This is the reality of production agent systems today:
 ## The Solution
 
 ```python
+from langchain.agents import create_agent
 from duralang import dura  # ← only new import
 
 @dura                       # ← only code change
 async def my_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)   # → Temporal Activity
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → Temporal Activity
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[TavilySearchResults(), calculator],
+    )
+    result = await agent.ainvoke({"messages": messages})  # LLM + tool calls → Temporal Activities
+    return result["messages"]
 ```
 
-**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every `ainvoke()` call is now a durable Temporal Activity — automatically retried, heartbeated, and recorded in Temporal's event history.
+**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every LLM call and tool call inside `create_agent` is now a durable Temporal Activity — automatically retried, heartbeated, and recorded in Temporal's event history.
 
 > **The LLM is stochastic and decides everything.**
 > duralang does not change that.
@@ -123,23 +117,18 @@ The model decides the path at runtime, and **every chosen step is durable.** No 
 ```python
 @dura
 async def research_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools([web_search, calculator])
-
-    while True:  # ← No fixed graph. LLM decides the path.
-        response = await llm_with_tools.ainvoke(messages)  # → durable
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → durable
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[web_search, calculator],
+    )
+    result = await agent.ainvoke({"messages": messages})  # every call → durable
+    return result["messages"]
 ```
 
 **Scale it up** — wrap `@dura` functions as tools with `dura_agent_tool()`, and you get durable multi-agent systems with the same pattern:
 
 ```python
+from langchain.agents import create_agent
 from duralang import dura, dura_agent_tool
 
 all_tools = [
@@ -150,21 +139,12 @@ all_tools = [
 
 @dura
 async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)  # mix agents + tools freely
-    tools_by_name = {t.name: t for t in all_tools}
-
-    messages = [HumanMessage(content=task)]
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            # Same ainvoke() for agents and tools. Routing is automatic.
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return response.content
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,  # mix agents + tools freely
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+    return result["messages"][-1].content
 ```
 
 Each sub-agent runs as an independent durable unit with its own event history. If the analyst crashes, **only the analyst retries** — the researcher's completed work is preserved.
@@ -256,27 +236,18 @@ Switch providers by changing one line. duralang automatically detects the provid
 
 ### ⚡ Parallel Tool Execution
 
-If the LLM returns multiple tool calls, execute them in parallel. Each call becomes its own durable operation, scheduled concurrently:
+When the LLM returns multiple tool calls, `create_agent` executes them in parallel automatically. Each call becomes its own durable Temporal Activity:
 
 ```python
 @dura
 async def my_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-
-        # Parallel execution — each call is independently durable
-        tasks = [tools_by_name[tc["name"]].ainvoke(tc["args"]) for tc in response.tool_calls]
-        results = await asyncio.gather(*tasks)
-
-        for tc, result in zip(response.tool_calls, results):
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[get_weather, get_time, calculator],  # multiple tools available
+    )
+    # Parallel tool calls handled internally — each is independently durable
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 ```
 
 ---
@@ -326,18 +297,19 @@ When you `import duralang`, it patches `BaseChatModel` and `BaseTool` so that ev
 
 ```python
 @dura
-async def my_agent(task):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")       # normal LangChain
-    llm_with_tools = llm.bind_tools(all_tools)             # normal LangChain
-
-    response = await llm_with_tools.ainvoke(messages)      # ← intercepted, durable
-    result = await tools_by_name[tc["name"]].ainvoke(args)  # ← intercepted, durable
+async def my_agent(messages):
+    agent = create_agent(                                    # normal LangChain
+        model="claude-sonnet-4-6",
+        tools=[web_search, calculator],
+    )
+    result = await agent.ainvoke({"messages": messages})    # ← internal calls intercepted, durable
+    return result["messages"]
 ```
 
 That's the entire mental model:
 
 - **`@dura`** on your function → makes it a Temporal Workflow
-- **`ainvoke()` calls inside** → each becomes a retryable Temporal Activity with its outcome recorded in event history
+- **LLM and tool calls inside** → each becomes a retryable Temporal Activity with its outcome recorded in event history
 - **`@dura` calling `@dura`** → becomes a Child Workflow with its own state
 - **Remove `@dura`** → everything runs as vanilla LangChain
 
@@ -375,28 +347,19 @@ temporal server start-dev
 
 ```python
 import asyncio
-from langchain_anthropic import ChatAnthropic
+from langchain.agents import create_agent
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from duralang import dura
-
-tools = [TavilySearchResults(max_results=3)]
-tools_by_name = {t.name: t for t in tools}
 
 @dura
 async def research_agent(messages: list) -> list:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[TavilySearchResults(max_results=3)],
+    )
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 
 async def main():
     result = await research_agent([HumanMessage(content="What is the weather in NYC?")])
@@ -483,7 +446,7 @@ tool = dura_agent_tool(researcher, name="search", description="Search the web.")
 ```
 
 - Auto-generates Pydantic `args_schema` from function signature
-- Returns a real `BaseTool` — compatible with `bind_tools()` and `ainvoke()`
+- Returns a real `BaseTool` — compatible with `create_agent(tools=...)` and `bind_tools()`
 - Sub-agent calls get their own event history and retry boundaries
 
 ### `DuraMCPSession(session, server_name)`

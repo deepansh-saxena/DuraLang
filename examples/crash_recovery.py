@@ -31,8 +31,8 @@ import os
 import sys
 from pathlib import Path
 
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from duralang import dura
@@ -125,33 +125,21 @@ def get_analyst_rating(ticker: str) -> str:
 
 # ── Agent ────────────────────────────────────────────────────────────────────
 
-tools = [get_stock_price, analyze_sentiment, get_analyst_rating]
-tools_by_name = {t.name: t for t in tools}
-
 
 @dura
 async def market_analyst(messages: list) -> list:
     """Market analysis agent with multiple tool calls."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    for iteration in range(10):
-        print(f"\n  >> LLM call #{iteration + 1}")
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-
-        if not response.tool_calls:
-            print(f"  >> Agent finished (no more tool calls)")
-            break
-
-        print(f"  >> LLM requested {len(response.tool_calls)} tool call(s)")
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(
-                ToolMessage(content=str(result), tool_call_id=tc["id"])
-            )
-
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[get_stock_price, analyze_sentiment, get_analyst_rating],
+        system_prompt=(
+            "You are a market analyst. Use the available tools to gather "
+            "stock prices, analyst ratings, and sentiment analysis. "
+            "Provide a comprehensive summary."
+        ),
+    )
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

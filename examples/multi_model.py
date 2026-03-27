@@ -2,6 +2,7 @@
 
 import asyncio
 
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
 from duralang import dura
@@ -10,20 +11,17 @@ from duralang import dura
 @dura
 async def chat_agent(messages: list, provider: str = "anthropic") -> list:
     """Agent that works with any LLM provider."""
-    if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        llm = ChatAnthropic(model="claude-sonnet-4-6")
-    elif provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        llm = ChatOpenAI(model="gpt-4o")
-    else:
+    models = {
+        "anthropic": "claude-sonnet-4-6",
+        "openai": "gpt-4o",
+    }
+    model = models.get(provider)
+    if model is None:
         raise ValueError(f"Unknown provider: {provider}")
 
-    response = await llm.ainvoke(messages)
-    messages.append(response)
-    return messages
+    agent = create_agent(model=model)
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 
 
 async def main():
