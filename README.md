@@ -74,28 +74,27 @@ async def my_agent(messages):
 
 ## What Happens When Something Fails
 
-```
-RUN (stochastic path chosen by the LLM)
+```mermaid
+graph TD
+    A["① llm.ainvoke()"] -->|"✓ success"| B["state checkpointed"]
+    B --> C["② tool.ainvoke()"]
+    C -->|"✗ timeout"| D["automatic retry"]
+    D -->|"backoff + heartbeat"| E["② tool.ainvoke()"]
+    E -->|"✓ retry succeeds"| F["state checkpointed"]
+    F --> G["③ llm.ainvoke()"]
+    G -->|"✓ success"| H["✅ DONE"]
 
-[1] llm.ainvoke()    : ✓ success  →  state checkpointed
-         |
-         v
-[2] tool.ainvoke()   : ✗ timeout  →  call fails
-         |
-         v
-    automatic retry (exponential backoff + configurable timeout + heartbeat)
-         |
-         v
-[2] tool.ainvoke()   : ✓ retry #2 succeeds  →  state checkpointed
-         |
-         v
-[3] llm.ainvoke()    : ✓ continues from latest durable state
-         |
-         v
-       DONE  (no full restart — completed calls are never re-executed)
+    style A fill:#22c55e,color:#fff
+    style B fill:#16a34a,color:#fff
+    style C fill:#ef4444,color:#fff
+    style D fill:#f59e0b,color:#fff
+    style E fill:#22c55e,color:#fff
+    style F fill:#16a34a,color:#fff
+    style G fill:#22c55e,color:#fff
+    style H fill:#3b82f6,color:#fff
 ```
 
-**Only the failed operation retries.** The completed LLM call at step 1 is replayed from Temporal's event history — not re-executed. No wasted API calls. No wasted money. No lost progress.
+**Only the failed operation retries.** Step ① is replayed from Temporal's event history — not re-executed. No wasted API calls. No wasted money. No lost progress.
 
 ### Process Crash Recovery
 
@@ -112,41 +111,6 @@ python examples/crash_recovery.py --crash
 ```
 
 See [`crash_recovery.py`](examples/crash_recovery.py) for the full working demo.
-
----
-
-## Why Not Just Use LangGraph?
-
-**duralang is not a competitor to LangGraph. They solve different problems.**
-
-LangGraph is excellent when you want explicit graph topology — defined nodes, conditional edges, and structured control flow. It's the right choice when your workflow has a known, designable shape.
-
-But many real-world agent systems are **fully stochastic**: the LLM decides at runtime which tools to call, in what order, how many times, whether to delegate to sub-agents, and when to stop. These free-form loops don't have a predefined graph — and forcing them into one creates friction:
-
-| Dimension | LangGraph | duralang |
-|---|---|---|
-| **Execution model** | Nodes and edges you define upfront | Free-form async loops (LLM decides the path) |
-| **Durability granularity** | Per-node checkpoint | Per-operation (every `ainvoke()` is individually durable) |
-| **Code change required** | Restructure into graph topology | Add `@dura` (zero restructuring) |
-| **Recovery unit** | Entire node re-executes | Only the failed call retries |
-| **When it fits best** | Designable workflows with known topology | Dynamic, LLM-driven agent loops |
-| **Multi-agent** | Subgraph composition | Child workflows with independent state |
-
-**The key insight:** LangGraph's checkpoints are at node boundaries. If a node contains 5 LLM calls and the 4th fails, you re-execute all 5. duralang's checkpoints are at the operation level — only the 4th call retries.
-
----
-
-## Why Not Just Use Temporal Directly?
-
-Temporal is the foundation duralang is built on. But using Temporal directly for LLM agents requires significant boilerplate:
-
-- Manually define `@workflow.defn` and `@activity.defn` for every agent function
-- Build custom serializers for LangChain message types across activity boundaries
-- Implement LLM identity extraction and reconstruction for each provider
-- Set up `ContextVar`-based proxy routing to intercept LangChain calls
-- Manage worker lifecycle, task queues, and retry policies per activity type
-
-duralang encapsulates all of this behind `@dura`. You get Temporal's full power — event history, deterministic replay, heartbeating, child workflows — with zero Temporal API surface area in your agent code.
 
 ---
 
@@ -366,6 +330,22 @@ async def my_agent(messages):
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     return messages
 ```
+
+---
+
+## Compared to Alternatives
+
+**duralang vs LangGraph** — they solve different problems:
+
+| | LangGraph | duralang |
+|---|---|---|
+| **Execution** | Graph nodes + edges | Free-form async loops |
+| **Durability** | Per-node checkpoint | Per-operation (`ainvoke()` level) |
+| **Code change** | Restructure into graph | Add `@dura` |
+| **Recovery** | Re-execute entire node | Retry only the failed call |
+| **Best for** | Known workflow topology | Stochastic, LLM-driven loops |
+
+**duralang vs Temporal directly** — duralang is built on Temporal, but eliminates the boilerplate: no manual workflow/activity definitions, no custom serializers, no worker lifecycle management. You get Temporal's full power behind `@dura`.
 
 ---
 
