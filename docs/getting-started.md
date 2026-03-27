@@ -1,81 +1,141 @@
 # Getting Started
 
-This guide gets you from install to first durable run fast.
+Get from zero to your first durable LLM agent in under 5 minutes.
 
 ---
 
 ## Prerequisites
 
-- Python 3.11+
-- A running Temporal server (local or cloud)
-- An LLM API key (Anthropic, OpenAI, Google, or Ollama)
+| Requirement | Why |
+|---|---|
+| **Python 3.11+** | DuraLang uses modern Python features (`ContextVar`, type unions, `asyncio`) |
+| **Temporal Server** | The durable execution engine. Runs locally or in the cloud |
+| **LLM API Key** | At least one of: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` |
 
-## Installation
+---
+
+## Step 1: Install DuraLang
 
 ```bash
-# With Anthropic
-pip install "duralang[anthropic]"
+pip install duralang
+```
 
-# With OpenAI
-pip install "duralang[openai]"
+With a specific LLM provider:
 
-# All providers
-pip install "duralang[all-models]"
+```bash
+pip install "duralang[anthropic]"     # Claude models
+pip install "duralang[openai]"        # GPT models
+pip install "duralang[google]"        # Gemini models
+pip install "duralang[ollama]"        # Local models via Ollama
+pip install "duralang[all-models]"    # All providers
+```
 
-# Start local Temporal (if not already running)
+---
+
+## Step 2: Start Temporal
+
+DuraLang needs a running Temporal server. The fastest way to get one:
+
+```bash
+# Install Temporal CLI (macOS)
+brew install temporal
+
+# Start the development server
+# Includes the Temporal UI at http://localhost:8233
 temporal server start-dev
 ```
 
+For other operating systems, see the [Temporal CLI quickstart](https://docs.temporal.io/cli).
+
+> **Note:** Leave this running in a separate terminal. DuraLang connects to it automatically on `localhost:7233`.
+
 ---
 
-## Your First Durable Agent
+## Step 3: Write Your First Durable Agent
 
-At the code level, the concept is simple: decorate your existing async LangChain agent function with `@dura`.
+Create a file called `my_agent.py`:
 
 ```python
+import asyncio
+from langchain_anthropic import ChatAnthropic
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.messages import HumanMessage, ToolMessage
 from duralang import dura
 
-@dura
-async def my_agent(messages):
-    # Your existing LangChain loop remains unchanged.
-    # llm.ainvoke(...), tool.ainvoke(...), mcp.call_tool(...)
-    ...
+# Standard LangChain tool
+tools = [TavilySearchResults(max_results=3)]
+tools_by_name = {t.name: t for t in tools}
+
+@dura  # ← This is the only DuraLang-specific line
+async def research_agent(messages: list) -> list:
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools(tools)
+
+    while True:
+        response = await llm_with_tools.ainvoke(messages)   # → Temporal Activity
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → Temporal Activity
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+    return messages
+
+async def main():
+    result = await research_agent(
+        [HumanMessage(content="What are the latest developments in AI agents?")]
+    )
+    print(result[-1].content)
+
+asyncio.run(main())
 ```
 
-Then call it like a normal async function.
-
----
-
-## Run A Complete Example
-
-Use one of the included examples for a full runnable script.
+Run it:
 
 ```bash
-python examples/basic_agent.py
+python my_agent.py
 ```
-
-More examples:
-
-- `examples/multi_tool.py`
-- `examples/mcp_agent.py`
-- `examples/stochastic_agents.py`
 
 ---
 
-## What Happens Under The Hood
+## Step 4: Inspect in Temporal UI
 
-1. `@dura` wrapped your function
-2. When called, it started a Temporal Workflow
-3. Inside the workflow, DuraLang intercepted every `llm.ainvoke()` and `tool.ainvoke()` call
-4. Each call became an individually retryable Temporal Activity
-5. If anything failed, Temporal would have retried it automatically
-6. Your function returned normally, as if nothing happened
+Open [http://localhost:8233](http://localhost:8233) in your browser. You'll see your workflow with a complete timeline of every operation:
+
+- **Each LLM call** — with input messages, output response, latency, and attempt count
+- **Each tool call** — with tool name, arguments, result, and retry history
+- **Workflow state** — start time, completion, and return value
+
+Every operation is individually visible, searchable, and replayable.
+
+---
+
+## What Just Happened
+
+Behind the scenes, `@dura` did the following — without you writing any of it:
+
+1. **Wrapped your function** as a Temporal Workflow
+2. **Set a `DuraContext`** via Python's `contextvars.ContextVar`
+3. **Intercepted every `ainvoke()` call** — LLM calls routed to `dura__llm` Activity, tool calls routed to `dura__tool` Activity
+4. **Checkpointed each operation** in Temporal's event history
+5. **Applied retry policies** — transient failures (timeouts, rate limits) would be retried automatically with exponential backoff
+6. **Emitted heartbeats** — if any operation hung, Temporal would detect it and reschedule
+7. **Returned the result** as if nothing happened — your calling code sees a normal async function
+
+If any call had failed, Temporal would have retried it. If the entire process had crashed, restarting with the same workflow ID would resume from the last checkpoint — no completed calls re-executed, no API costs wasted.
 
 ---
 
 ## Next Steps
 
-- [Core Concepts](core-concepts.md) — understand how interception works
-- [Tools & MCP](tools-and-mcp.md) — mix sub-agents, regular tools, and MCP servers
-- [Configuration](configuration.md) — customize timeouts, retries, and host
-- [Examples](examples.md) — multi-tool, MCP, multi-agent examples
+You now have a working durable agent. Here's where to go from here:
+
+| Goal | Doc |
+|---|---|
+| Understand how interception works at the code level | [Core Concepts](core-concepts.md) |
+| See the full architecture with sequence diagrams | [Architecture](architecture.md) |
+| Build multi-agent systems with sub-agents as tools | [Tools & MCP](tools-and-mcp.md) |
+| Customize retries, timeouts, and heartbeats | [Configuration](configuration.md) |
+| Run the crash recovery demo | [Examples](examples.md) |
+| Connect MCP servers for file/database/API access | [Tools & MCP](tools-and-mcp.md) |
