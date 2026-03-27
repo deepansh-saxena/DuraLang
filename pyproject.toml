@@ -3,15 +3,30 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "langforge"
+name = "duralang"
 version = "0.1.0"
 requires-python = ">=3.11"
-description = "Durable LangGraph execution powered by Temporal"
+description = "Write normal LangChain code. Get Temporal durability. One decorator."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Deepansh Saxena" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["langchain", "temporal", "durability", "agents", "llm", "mcp"]
 
 dependencies = [
     "temporalio>=1.7.0",
     "langchain-core>=0.3.0",
-    "langgraph>=0.2.0",
     "mcp>=1.0.0",
     "pydantic>=2.0.0",
 ]
@@ -32,13 +47,18 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.12.0",
     "temporalio[testserver]>=1.7.0",
-    "langforge[all-models]",
+    "duralang[all-models]",
     "ruff",
     "mypy",
 ]
 
+[project.urls]
+Homepage = "https://github.com/deepanshsaxena/duralang"
+Repository = "https://github.com/deepanshsaxena/duralang"
+Documentation = "https://github.com/deepanshsaxena/duralang/tree/main/docs"
+
 [project.scripts]
-langforge = "langforge.cli:main"
+duralang = "duralang.cli:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
