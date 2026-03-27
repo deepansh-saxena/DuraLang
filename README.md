@@ -116,6 +116,43 @@ See [`crash_recovery.py`](examples/crash_recovery.py) for the full working demo.
 
 ## Features
 
+### 🧭 Durable Stochastic Workflows
+
+The model decides the path at runtime, and **every chosen step is durable.** No predefined graph. Whatever branch the LLM takes is captured as durable state.
+
+```python
+@dura
+async def research_agent(messages):
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools([web_search, calculator])
+
+    while True:  # ← No fixed graph. LLM decides the path.
+        response = await llm_with_tools.ainvoke(messages)  # → durable
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → durable
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    return messages
+```
+
+---
+
+### 🔍 Free, Built-in Observability
+
+Every execution is fully inspectable in the **Temporal UI** at `http://localhost:8233` — no paid services, no SDK integration, no extra code:
+
+- **Per-call timeline:** Every LLM call, tool call, and agent call with inputs, outputs, latency, and attempt count
+- **Retry history:** Exactly which calls failed, when, and how many attempts were needed
+- **Workflow hierarchy:** Parent → child agent nesting visible as a tree
+- **Full event history:** See the complete durable state after each operation
+- **Replayable:** Temporal's event history is a deterministic record of the entire execution
+
+> **No equivalent exists for free.** LangSmith charges per trace. OpenTelemetry requires setup and a backend. With duralang, observability is automatic — every `@dura` function is fully traced in the Temporal UI with zero configuration.
+
+---
+
 ### 🤖 Durable Multi-Agent Systems
 
 Sub-agents run as **independent durable units** — each with its own retry boundaries and timeouts. Two patterns:
@@ -181,43 +218,6 @@ orchestrator
 ```
 
 If the analyst crashes, **only the analyst retries**. The researcher's completed work is preserved. Nesting works to any depth.
-
----
-
-### 🧭 Durable Stochastic Workflows
-
-The model decides the path at runtime, and **every chosen step is durable.** No predefined graph. Whatever branch the LLM takes is captured as durable state.
-
-```python
-@dura
-async def research_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools([web_search, calculator])
-
-    while True:  # ← No fixed graph. LLM decides the path.
-        response = await llm_with_tools.ainvoke(messages)  # → durable
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → durable
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
-```
-
----
-
-### 🔍 Free, Built-in Observability
-
-Every execution is fully inspectable in the **Temporal UI** at `http://localhost:8233` — no paid services, no SDK integration, no extra code:
-
-- **Per-call timeline:** Every LLM call, tool call, and agent call with inputs, outputs, latency, and attempt count
-- **Retry history:** Exactly which calls failed, when, and how many attempts were needed
-- **Workflow hierarchy:** Parent → child agent nesting visible as a tree
-- **Full event history:** See the complete durable state after each operation
-- **Replayable:** Temporal's event history is a deterministic record of the entire execution
-
-> **No equivalent exists for free.** LangSmith charges per trace. OpenTelemetry requires setup and a backend. With duralang, observability is automatic — every `@dura` function is fully traced in the Temporal UI with zero configuration.
 
 ---
 
