@@ -37,9 +37,9 @@ async def multi_tool_agent(messages: list) -> list:
         if not response.tool_calls:
             break
 
-        # Parallel tool execution — each becomes its own dura__tool Activity
+        # Parallel tool execution — each becomes its own Temporal Activity
         tasks = [
-            tools_by_name[tc["name"]].arun(tc["args"])
+            tools_by_name[tc["name"]].ainvoke(tc["args"])
             for tc in response.tool_calls
         ]
         results = await asyncio.gather(*tasks)

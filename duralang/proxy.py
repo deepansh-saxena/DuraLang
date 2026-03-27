@@ -104,6 +104,11 @@ class DuraToolProxy:
             if ctx is None:
                 return await original_ainvoke(input, *args, **kwargs)
 
+            # Agent tools handle their own durability via child workflows —
+            # skip dura__tool activity routing and call _arun directly.
+            if getattr(original_instance, "__dura_agent_tool__", False):
+                return await original_ainvoke(input, *args, **kwargs)
+
             tool_input = input if isinstance(input, (dict, str)) else str(input)
 
             result: ToolActivityResult = await ctx.execute_activity(

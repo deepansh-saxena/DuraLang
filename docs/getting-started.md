@@ -53,7 +53,7 @@ async def my_agent(messages: list) -> list:
             break
 
         for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].arun(tc["args"])
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
             messages.append(ToolMessage(
                 content=str(result),
                 tool_call_id=tc["id"]
@@ -77,10 +77,10 @@ This is **identical LangChain code**. The only addition is `@dura` on line 10.
 ## What Just Happened
 
 1. `@dura` wrapped your function
-2. When called, it started a `DuraLangWorkflow` on Temporal
-3. Inside the workflow, proxy objects intercepted `llm.ainvoke()` and `tool.arun()`
-4. Each call became a Temporal Activity (`dura__llm`, `dura__tool`)
-5. Temporal retried failures, heartbeated long-running calls, and persisted state
+2. When called, it started a Temporal Workflow
+3. Inside the workflow, DuraLang intercepted every `llm.ainvoke()` and `tool.ainvoke()` call
+4. Each call became an individually retryable Temporal Activity
+5. If anything failed, Temporal would have retried it automatically
 6. Your function returned normally, as if nothing happened
 
 ---
@@ -88,5 +88,6 @@ This is **identical LangChain code**. The only addition is `@dura` on line 10.
 ## Next Steps
 
 - [Core Concepts](core-concepts.md) — understand how interception works
+- [Tools & MCP](tools-and-mcp.md) — mix sub-agents, regular tools, and MCP servers
 - [Configuration](configuration.md) — customize timeouts, retries, and host
 - [Examples](examples.md) — multi-tool, MCP, multi-agent examples

@@ -11,9 +11,10 @@ graph TB
     subgraph "Your Code"
         A["@dura<br/>async def my_agent(messages)"]
         B["llm.ainvoke(messages)"]
-        C["tool.arun(input)"]
+        C["tool.ainvoke(input)"]
         D["session.call_tool(...)"]
         E["await other_dura_fn(...)"]
+        AT["dura_agent_tool(fn).ainvoke(args)"]
     end
 
     subgraph "DuraLang Layer"
@@ -23,6 +24,7 @@ graph TB
         I["DuraToolProxy"]
         J["DuraMCPProxy"]
         K["Child Workflow"]
+        AG["AgentTool<br/>(BaseTool → @dura)"]
     end
 
     subgraph "Temporal"
@@ -43,6 +45,8 @@ graph TB
     C -->|"intercepted"| I
     D -->|"intercepted"| J
     E -->|"detected"| K
+    AT -->|"calls @dura fn"| AG
+    AG -->|"detected"| K
 
     H -->|"execute_activity"| L
     I -->|"execute_activity"| M
@@ -131,10 +135,10 @@ sequenceDiagram
     WF-->>LLMProxy: AIMessage
     LLMProxy-->>UserFn: AIMessage
 
-    Note over UserFn: asyncio.gather(<br/>  tool_1.arun(tc_1.args),<br/>  tool_2.arun(tc_2.args)<br/>)
+    Note over UserFn: asyncio.gather(<br/>  tool_1.ainvoke(tc_1.args),<br/>  tool_2.ainvoke(tc_2.args)<br/>)
 
     par Parallel Tool Execution
-        UserFn->>ToolProxy1: tool_1.arun(args)
+        UserFn->>ToolProxy1: tool_1.ainvoke(args)
         ToolProxy1->>WF: execute_activity("dura__tool")
         WF->>T: schedule dura__tool
         T->>A1: dura__tool(payload_1)
@@ -143,7 +147,7 @@ sequenceDiagram
         WF-->>ToolProxy1: result_1
         ToolProxy1-->>UserFn: output_1
     and
-        UserFn->>ToolProxy2: tool_2.arun(args)
+        UserFn->>ToolProxy2: tool_2.ainvoke(args)
         ToolProxy2->>WF: execute_activity("dura__tool")
         WF->>T: schedule dura__tool
         T->>A2: dura__tool(payload_2)
@@ -225,11 +229,14 @@ graph LR
     subgraph "Call Time"
         H --> I{"DuraContext.get()"}
         I -->|"None"| J["Call original ainvoke<br/>(normal LangChain)"]
-        I -->|"Context exists"| K["Route to dura__llm<br/>(Temporal Activity)"]
+        I -->|"Context exists"| K{"__dura_agent_tool__?"}
+        K -->|"No"| L2["Route to dura__tool<br/>(Temporal Activity)"]
+        K -->|"Yes"| M2["Call @dura fn directly<br/>(Child Workflow)"]
     end
 
     style J fill:#d4edda
-    style K fill:#cce5ff
+    style L2 fill:#cce5ff
+    style M2 fill:#fff3cd
 ```
 
 ---
@@ -358,9 +365,10 @@ graph TD
 | Component | Role |
 |---|---|
 | `@dura` | Entry point — wraps user function, starts workflow |
+| `dura_agent_tool()` | Wraps `@dura` function as `BaseTool` — mixable with regular tools |
 | `DuraContext` | ContextVar bridge — proxies read it to decide routing |
 | `DuraLLMProxy` | Intercepts `ainvoke()` — routes to `dura__llm` |
-| `DuraToolProxy` | Intercepts `ainvoke()` — routes to `dura__tool` |
+| `DuraToolProxy` | Intercepts `ainvoke()` — routes to `dura__tool` (skips agent tools) |
 | `DuraMCPProxy` | Intercepts `call_tool()` — routes to `dura__mcp` |
 | `DuraRunner` | Temporal client/worker lifecycle — singleton per config |
 | `DuraLangWorkflow` | Temporal workflow — sets context, runs user function |

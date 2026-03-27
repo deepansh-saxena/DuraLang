@@ -1,4 +1,9 @@
-"""Basic agent — identical LangChain code with @dura for durability."""
+"""Basic agent — identical LangChain code with @dura for durability.
+
+This is a standard LangChain agent loop. The only DuraLang addition is
+@dura on the function. Every LLM call and tool call inside becomes a
+Temporal Activity — automatically retried, heartbeated, and durable.
+"""
 
 import asyncio
 
@@ -25,7 +30,7 @@ async def research_agent(messages: list) -> list:
             break
 
         for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].arun(tc["args"])
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=tc["id"])
             )

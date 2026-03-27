@@ -1,6 +1,6 @@
 # Tools & MCP
 
-DuraLang supports two types of tool integrations: **LangChain tools** and **MCP (Model Context Protocol) servers**. Both are intercepted automatically inside `@dura` functions.
+DuraLang supports three types of tool integrations: **LangChain tools**, **agent tools** (sub-agents as tools), and **MCP (Model Context Protocol) servers**. All are intercepted automatically inside `@dura` functions and can be mixed freely.
 
 ---
 
@@ -24,7 +24,7 @@ async def my_agent(messages):
     response = await llm_with_tools.ainvoke(messages)
     # If the LLM calls get_weather, it becomes a dura__tool Activity
     for tc in response.tool_calls:
-        result = await get_weather.arun(tc["args"])  # -> Temporal Activity
+        result = await get_weather.ainvoke(tc["args"])  # -> Temporal Activity
         ...
 ```
 
@@ -35,11 +35,79 @@ If the LLM returns multiple tool calls, you can execute them in parallel. `async
 ```python
 import asyncio
 
-tasks = [tools_by_name[tc["name"]].arun(tc["args"]) for tc in response.tool_calls]
+tasks = [tools_by_name[tc["name"]].ainvoke(tc["args"]) for tc in response.tool_calls]
 results = await asyncio.gather(*tasks)
 ```
 
 Each tool call becomes its own `dura__tool` Activity, scheduled in parallel by Temporal.
+
+---
+
+## Agent Tools — Sub-Agents as Tools
+
+`dura_agent_tool()` wraps a `@dura` function as a real LangChain `BaseTool`. This lets you mix sub-agents and regular tools in the **same list**, **same `bind_tools()` call**, and **same `ainvoke()` dispatch loop**.
+
+Under the hood, agent tool calls become **Temporal Child Workflows** (not `dura__tool` activities), giving each sub-agent its own event history, timeouts, and retry boundaries.
+
+```python
+from duralang import dura, dura_agent_tool
+
+@dura
+async def researcher(query: str) -> str:
+    """Research agent — gathers information via web search."""
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools([web_search, wikipedia_lookup])
+
+    messages = [HumanMessage(content=query)]
+    for _ in range(10):
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    return response.content
+
+# Mix agent tools and regular tools in the same list
+all_tools = [
+    dura_agent_tool(researcher),   # → Child Workflow
+    calculator,                     # → dura__tool Activity
+]
+tools_by_name = {t.name: t for t in all_tools}
+
+@dura
+async def orchestrator(task: str) -> str:
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools(all_tools)
+
+    messages = [HumanMessage(content=task)]
+    while True:
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            # Same ainvoke() — routing happens automatically
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    return response.content
+```
+
+### How `dura_agent_tool()` works
+
+1. Reads the `@dura` function's **signature**, **type hints**, and **docstring**
+2. Generates a Pydantic `args_schema` and tool schema automatically
+3. Returns a real `BaseTool` whose `_arun()` calls the `@dura` function
+4. When called inside a `@dura` context, the call routes as a Child Workflow (not a `dura__tool` activity), giving the sub-agent its own event history
+
+### Naming
+
+By default, `dura_agent_tool(researcher)` creates a tool named `call_researcher`. Override with:
+
+```python
+dura_agent_tool(researcher, name="search", description="Search the web for info.")
+```
 
 ---
 
@@ -72,7 +140,49 @@ async with stdio_client(server_params) as (read, write):
 
 ## How Routing Works
 
-- **LangChain tools**: Proxy intercepts `BaseTool.ainvoke()` -> `dura__tool` Activity
-- **MCP tools**: Proxy intercepts `ClientSession.call_tool()` -> `dura__mcp` Activity
+| Call Type | Proxy | Temporal Primitive |
+|---|---|---|
+| `@tool` function `.ainvoke()` | `DuraToolProxy` | `dura__tool` Activity |
+| `dura_agent_tool(fn).ainvoke()` | Skips proxy, calls `@dura` directly | Child Workflow |
+| `mcp_session.call_tool()` | `DuraMCPProxy` | `dura__mcp` Activity |
 
-The `dura__tool` Activity looks up the tool by name in `ToolRegistry`. The `dura__mcp` Activity looks up the session by server name in `MCPSessionRegistry`.
+The `dura__tool` Activity looks up the tool by name in `ToolRegistry`. The `dura__mcp` Activity looks up the session by server name in `MCPSessionRegistry`. Agent tools bypass both registries — they call the `@dura` function directly, which the decorator routes as a Child Workflow.
+
+---
+
+## Mixing Everything Together
+
+All three tool types can coexist in the same agent:
+
+```python
+all_tools = [
+    dura_agent_tool(researcher),   # → Child Workflow
+    dura_agent_tool(writer),       # → Child Workflow
+    calculator,                     # → dura__tool Activity
+]
+
+@dura
+async def orchestrator(task: str) -> str:
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools(all_tools)
+    tools_by_name = {t.name: t for t in all_tools}
+
+    # MCP server for file access
+    fs = DuraMCPSession(mcp_session, "filesystem")
+
+    messages = [HumanMessage(content=task)]
+    while True:
+        response = await llm_with_tools.ainvoke(messages)      # → dura__llm
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+    # MCP calls work alongside everything else
+    data = await fs.call_tool("read_file", {"path": "/tmp/report.csv"})  # → dura__mcp
+    return response.content
+```
+
+The LLM sees a flat list of tools. DuraLang routes each call to the right Temporal primitive automatically.

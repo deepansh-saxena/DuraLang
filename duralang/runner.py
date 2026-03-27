@@ -59,23 +59,45 @@ class DuraRunner:
         )
         self._worker_task = asyncio.create_task(self._worker.run())
 
-    async def run(self, fn: Any, args: tuple, kwargs: dict) -> Any:
-        """Execute fn as a top-level DuraLangWorkflow."""
-        fn_path = _get_fn_path(fn)
-        wf_id = f"duralang-{fn.__name__}-{uuid.uuid4().hex[:8]}"
+    async def run(
+        self, fn: Any, args: tuple, kwargs: dict, workflow_id: str | None = None
+    ) -> Any:
+        """Execute fn as a top-level DuraLangWorkflow.
 
-        handle = await self._client.start_workflow(
-            "DuraLangWorkflow",
-            WorkflowPayload(
-                fn_path=fn_path,
-                args=ArgSerializer.serialize(args),
-                kwargs=ArgSerializer.serialize_kwargs(kwargs),
-                config_dict=_serialize_config(self.config),
-            ),
-            id=wf_id,
-            task_queue=self.config.task_queue,
-            result_type=WorkflowResult,
+        Args:
+            fn: The @dura-decorated function to execute.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+            workflow_id: Optional fixed workflow ID. If provided and a workflow
+                with this ID is already running, reconnects to it instead of
+                starting a new one. Useful for crash recovery.
+        """
+        fn_path = _get_fn_path(fn)
+        wf_id = workflow_id or f"duralang-{fn.__name__}-{uuid.uuid4().hex[:8]}"
+
+        payload = WorkflowPayload(
+            fn_path=fn_path,
+            args=ArgSerializer.serialize(args),
+            kwargs=ArgSerializer.serialize_kwargs(kwargs),
+            config_dict=_serialize_config(self.config),
         )
+
+        try:
+            handle = await self._client.start_workflow(
+                "DuraLangWorkflow",
+                payload,
+                id=wf_id,
+                task_queue=self.config.task_queue,
+                result_type=WorkflowResult,
+            )
+        except Exception as e:
+            # If workflow already exists (e.g. resuming after crash),
+            # reconnect to the existing workflow handle.
+            if "already started" in str(e).lower():
+                handle = self._client.get_workflow_handle(wf_id)
+            else:
+                raise
+
         result: WorkflowResult = await handle.result()
         if result.error:
             from duralang.exceptions import WorkflowFailedError

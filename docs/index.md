@@ -2,7 +2,7 @@
 
 Welcome to DuraLang — **write normal LangChain code, get Temporal durability with one decorator**.
 
-DuraLang adds `@dura` to your existing LangChain agent. Every `llm.ainvoke()`, `tool.arun()`, and `session.call_tool()` becomes a Temporal Activity — automatically retried, heartbeated, and visible in the Temporal UI. `@dura` functions calling other `@dura` functions become Temporal Child Workflows. Your code doesn't change.
+DuraLang adds `@dura` to your existing LangChain agent. Every `llm.ainvoke()`, `tool.ainvoke()`, and `session.call_tool()` becomes a Temporal Activity — automatically retried, heartbeated, and visible in the Temporal UI. `@dura` functions calling other `@dura` functions become Temporal Child Workflows. `dura_agent_tool()` wraps sub-agents as real `BaseTool` instances — mixable with regular tools in the same `bind_tools()` call. Your code doesn't change.
 
 ---
 
@@ -26,12 +26,15 @@ DuraLang adds `@dura` to your existing LangChain agent. Every `llm.ainvoke()`, `
 ## The Entire API
 
 ```python
-from duralang import dura
+from duralang import dura, dura_agent_tool
 
 @dura
 async def my_agent(messages):
     # your existing LangChain code here, unchanged
     ...
+
+# Wrap @dura functions as tools for multi-agent orchestration
+agent_tool = dura_agent_tool(my_agent)
 
 result = await my_agent([HumanMessage(content="hello")])
 ```

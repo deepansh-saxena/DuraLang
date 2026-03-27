@@ -30,6 +30,9 @@ def dura(_fn=None, *, config: DuraConfig | None = None):
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Extract DuraLang-specific kwargs before passing to the function
+            workflow_id = kwargs.pop("_workflow_id", None)
+
             # Check if we are ALREADY inside a dura workflow context
             ctx = DuraContext.get()
             if ctx is not None:
@@ -40,7 +43,7 @@ def dura(_fn=None, *, config: DuraConfig | None = None):
             from duralang.runner import DuraRunner
 
             runner = await DuraRunner.get_or_create(_config)
-            return await runner.run(fn, args, kwargs)
+            return await runner.run(fn, args, kwargs, workflow_id=workflow_id)
 
         wrapper.__dura__ = True
         wrapper.__dura_config__ = _config

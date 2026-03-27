@@ -1,5 +1,6 @@
 """DuraLang — Write normal LangChain code. Get Temporal durability. One decorator."""
 
+from duralang.agent_tool import dura_agent_tool
 from duralang.config import ActivityConfig, DuraConfig
 from duralang.decorator import dura
 from duralang.exceptions import (
@@ -42,6 +43,7 @@ class DuraMCPSession:
 
 __all__ = [
     "dura",
+    "dura_agent_tool",
     "DuraConfig",
     "ActivityConfig",
     "DuraMCPSession",

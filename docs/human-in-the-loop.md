@@ -1,19 +1,19 @@
 # Human-in-the-Loop
 
-DuraLang supports pausing a running workflow to wait for human input using Temporal Signals. This is a v2 feature currently in development.
+DuraLang will support pausing a running workflow to wait for human input using Temporal Signals. This is planned for v2.
 
 ---
 
 ## Concept
 
-The `DuraLangWorkflow` supports a `human_input` signal that can inject a `HumanMessage` into the message history mid-execution. This allows external systems to pause an agent, collect human feedback, and resume.
+Temporal Signals allow external systems to send data into a running workflow. For DuraLang, this means an agent can pause mid-execution, wait for a human to approve or provide input, and resume from exactly where it left off.
 
 ---
 
 ## How It Will Work
 
 ```python
-# Inside the workflow, a pause can be triggered
+# Inside the workflow, the agent pauses for human input
 # The workflow waits for a signal before continuing
 
 # External code sends the signal:
@@ -25,4 +25,6 @@ await handle.signal(DuraLangWorkflow.human_input, "Yes, proceed with the plan")
 
 ## Current Status
 
-The signal handler is defined in `DuraLangWorkflow` but the full human-in-the-loop flow (pause triggers, resume logic) is planned for a future release.
+This feature is planned for v2. The signal handler is defined in `DuraLangWorkflow` but the full flow (pause triggers, resume logic, approval patterns) is not yet implemented.
+
+For now, if you need human-in-the-loop behavior, you can split your workflow into two `@dura` functions — the first runs up to the approval point, and the second continues after your application collects the human input.
