@@ -116,34 +116,11 @@ See [`crash_recovery.py`](examples/crash_recovery.py) for the full working demo.
 
 ## Features
 
-### 🧭 Durable Stochastic Workflows
-
-The model decides the path at runtime, and **every chosen step is durable.** There is no predefined graph and no hardcoded route. Whatever branch the LLM takes is captured as durable execution state in Temporal's event history.
-
-```python
-@dura
-async def research_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools([web_search, calculator])
-
-    while True:  # ← No fixed graph. LLM decides the path.
-        response = await llm_with_tools.ainvoke(messages)  # → durable
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → durable
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
-```
-
----
-
 ### 🤖 Durable Multi-Agent Systems
 
-Sub-agents run as **independent durable units** with their own Temporal event history, retry boundaries, and timeouts. Two patterns are supported:
+Sub-agents run as **independent durable units** — each with its own retry boundaries and timeouts. Two patterns:
 
-**Pattern 1: Direct calls** — Your code decides which agents to call:
+**Pattern 1: Direct calls** — your code decides which agents to call:
 
 ```python
 @dura
@@ -153,14 +130,13 @@ async def researcher(query: str) -> str:
 
 @dura
 async def orchestrator(task: str) -> str:
-    # @dura calling @dura → Temporal Child Workflow automatically
-    research = await researcher(f"Research: {task}")
+    research = await researcher(f"Research: {task}")  # → independent sub-agent
     llm = ChatAnthropic(model="claude-sonnet-4-6")
     response = await llm.ainvoke([HumanMessage(content=f"Summarize: {research}")])
     return response.content
 ```
 
-**Pattern 2: Agent tools** — The LLM decides which agents to call:
+**Pattern 2: Agent tools** — the LLM decides which agents to call:
 
 ```python
 from duralang import dura, dura_agent_tool
@@ -190,7 +166,7 @@ async def orchestrator(task: str) -> str:
     return response.content
 ```
 
-**`dura_agent_tool()`** wraps any `@dura` function as a real LangChain `BaseTool` — auto-generating the Pydantic schema from the function signature, type hints, and docstring. The LLM sees a flat tool list. duralang routes each call to the right Temporal primitive.
+`dura_agent_tool()` auto-generates the Pydantic schema from the function signature. The LLM sees a flat tool list. duralang routes each call automatically.
 
 ```
 orchestrator
@@ -208,43 +184,57 @@ If the analyst crashes, **only the analyst retries**. The researcher's completed
 
 ---
 
-### 🕸️ Native MCP Support
+### 🧭 Durable Stochastic Workflows
 
-MCP (Model Context Protocol) servers are first-class citizens. Wrap once with `DuraMCPSession`, and every `call_tool()` becomes a durable Temporal Activity:
+The model decides the path at runtime, and **every chosen step is durable.** No predefined graph. Whatever branch the LLM takes is captured as durable state.
 
 ```python
-from duralang import dura, DuraMCPSession
-from mcp import ClientSession
+@dura
+async def research_agent(messages):
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    llm_with_tools = llm.bind_tools([web_search, calculator])
 
-async with ClientSession(read, write) as session:
-    await session.initialize()
-    fs = DuraMCPSession(session, "filesystem")  # ← one line
-
-    @dura
-    async def my_agent(messages):
-        result = await fs.call_tool("read_file", {"path": "/tmp/data.csv"})
-        # ← intercepted, durable (retried, heartbeated)
-        return result
+    while True:  # ← No fixed graph. LLM decides the path.
+        response = await llm_with_tools.ainvoke(messages)  # → durable
+        messages.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → durable
+            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    return messages
 ```
 
-`DuraMCPSession` proxies all methods to the underlying session. Only `call_tool()` is intercepted — everything else (like `list_tools()`) passes through normally.
+---
+
+### 🔍 Free, Built-in Observability
+
+Every execution is fully inspectable in the **Temporal UI** at `http://localhost:8233` — no paid services, no SDK integration, no extra code:
+
+- **Per-call timeline:** Every LLM call, tool call, and agent call with inputs, outputs, latency, and attempt count
+- **Retry history:** Exactly which calls failed, when, and how many attempts were needed
+- **Workflow hierarchy:** Parent → child agent nesting visible as a tree
+- **Full state at every checkpoint:** See the complete durable state after each operation
+- **Replayable:** Temporal's event history is a deterministic record of the entire execution
+
+> **No equivalent exists for free.** LangSmith charges per trace. OpenTelemetry requires setup and a backend. With duralang, observability is automatic — every `@dura` function is fully traced in the Temporal UI with zero configuration.
 
 ---
 
 ### 🧱 Durability Stack
 
-Every operation gets the full durability stack — not as separate features, but as one integrated system:
+Every operation gets the full durability stack automatically:
 
 | Layer | What It Does | Default |
 |---|---|---|
 | **Retries** | Exponential backoff on transient failures | 3 attempts, 2× backoff |
 | **Timeouts** | Bounded execution per operation | 10 min (LLM), 2 min (tool), 5 min (MCP) |
-| **Heartbeating** | Detects hung operations | 5 min (LLM), 30s (tool/MCP) |
+| **Heartbeating** | Detects hung operations (distinguishes "still thinking" from "stuck") | 5 min (LLM), 30s (tool/MCP) |
 | **State** | Durable checkpoint after each operation | Automatic via Temporal history |
 
-Non-retryable errors (e.g., `ValueError`, `TypeError`) fail immediately. Transient errors (timeouts, rate limits, network failures) are retried automatically with backoff.
+Non-retryable errors (e.g., `ValueError`, `TypeError`) fail immediately. Transient errors (timeouts, rate limits, network failures) are retried automatically.
 
-All defaults are configurable per activity type:
+All defaults are configurable:
 
 ```python
 from datetime import timedelta
@@ -271,26 +261,6 @@ async def my_agent(messages):
 
 ---
 
-### 💓 Heartbeating
-
-Hung operations are detected automatically. Every LLM call, tool call, and MCP call emits heartbeat signals while running. If heartbeats stop (dead process, infinite loop, stuck API), Temporal marks the operation as unhealthy and reschedules it.
-
-This matters for LLM calls that can take 30–120 seconds — a timeout alone can't distinguish between "still thinking" and "stuck." Heartbeats can.
-
----
-
-### 🔍 Built-in Observability
-
-Every execution is fully inspectable in the Temporal UI at `http://localhost:8233`:
-
-- **Per-call timeline:** See every LLM call, tool call, and MCP call with inputs, outputs, latency, and attempt number
-- **Retry history:** See exactly which calls failed, when, and how many attempts were needed
-- **Workflow hierarchy:** Parent → child workflow nesting is visible as a tree
-- **State progression:** Full durable state at every checkpoint
-- **Replayable:** Temporal's event history is a deterministic record of the entire execution
-
----
-
 ### 🌐 Model-Agnostic
 
 duralang works with any LangChain-compatible `BaseChatModel`. Same code, any provider:
@@ -308,7 +278,7 @@ Switch providers by changing one line. duralang automatically detects the provid
 
 ### ⚡ Parallel Tool Execution
 
-If the LLM returns multiple tool calls, execute them in parallel. `asyncio.gather` works as expected — each call becomes its own Temporal Activity, scheduled concurrently:
+If the LLM returns multiple tool calls, execute them in parallel. Each call becomes its own durable operation, scheduled concurrently:
 
 ```python
 @dura
@@ -322,13 +292,34 @@ async def my_agent(messages):
         if not response.tool_calls:
             break
 
-        # Parallel execution — each call is an independent durable Activity
+        # Parallel execution — each call is independently durable
         tasks = [tools_by_name[tc["name"]].ainvoke(tc["args"]) for tc in response.tool_calls]
         results = await asyncio.gather(*tasks)
 
         for tc, result in zip(response.tool_calls, results):
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     return messages
+```
+
+---
+
+### 🕸️ Native MCP Support
+
+MCP (Model Context Protocol) servers are first-class citizens. Wrap once with `DuraMCPSession`, and every `call_tool()` becomes durable:
+
+```python
+from duralang import dura, DuraMCPSession
+from mcp import ClientSession
+
+async with ClientSession(read, write) as session:
+    await session.initialize()
+    fs = DuraMCPSession(session, "filesystem")  # ← one line
+
+    @dura
+    async def my_agent(messages):
+        result = await fs.call_tool("read_file", {"path": "/tmp/data.csv"})
+        # ← intercepted, durable (retried, heartbeated)
+        return result
 ```
 
 ---
