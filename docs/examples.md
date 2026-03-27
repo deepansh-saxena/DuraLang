@@ -11,9 +11,8 @@ Complete runnable examples demonstrating every DuraLang capability. All examples
 | [`basic_agent.py`](../examples/basic_agent.py) | Standard LangChain agent with `@dura` | One decorator, zero code change |
 | [`multi_tool.py`](../examples/multi_tool.py) | Parallel tool execution | `asyncio.gather` with durable Activities |
 | [`multi_model.py`](../examples/multi_model.py) | Same agent, different LLM providers | Model-agnostic durability |
-| [`multi_agent.py`](../examples/multi_agent.py) | Direct `@dura` → `@dura` calls + `dura_agent_tool()` | Child Workflows, LLM-driven delegation |
-| [`stochastic_agents.py`](../examples/stochastic_agents.py) | Fully stochastic orchestrator | Mixed agent/tool dispatch, runtime decisions |
-| [`multiagent_system.py`](../examples/multiagent_system.py) | Multi-agent pipeline: research → analyze → write | Fixed pipeline with independent sub-agents |
+| [`multiagent_system.py`](../examples/multiagent_system.py) | Multi-agent orchestrator with mixed agent/tool dispatch | Child Workflows, LLM-driven delegation |
+| [`sequential_agents.py`](../examples/sequential_agents.py) | Sequential pipeline: research → analyze → write | Fixed pipeline with independent sub-agents |
 | [`mcp_agent.py`](../examples/mcp_agent.py) | MCP filesystem server integration | `DuraMCPSession` for durable MCP calls |
 | [`crash_recovery.py`](../examples/crash_recovery.py) | Automatic retry + process crash recovery | Temporal replay, deterministic workflow IDs |
 | [`human_in_loop.py`](../examples/human_in_loop.py) | Human-in-the-loop pattern | Signal-based pause/resume (v2 preview) |
@@ -109,44 +108,9 @@ async def chat_agent(messages: list, provider: str = "anthropic") -> list:
 
 ---
 
-## Multi-Agent
+## Multi-Agent System
 
-**File:** [`examples/multi_agent.py`](../examples/multi_agent.py)
-
-Shows both patterns for multi-agent calls:
-
-### Pattern 1: Direct `@dura` → `@dura` calls
-
-Your code decides which agent to call. The `@dura` decorator detects the existing context and routes as a Child Workflow:
-
-```python
-@dura
-async def orchestrator(task: str) -> str:
-    research = await researcher(f"Research: {task}")  # → Child Workflow
-    ...
-```
-
-### Pattern 2: `dura_agent_tool()` — LLM decides
-
-The LLM decides which agents to call. Sub-agents are wrapped as tools:
-
-```python
-all_tools = [dura_agent_tool(researcher)]  # → Child Workflow when called
-
-@dura
-async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-    ...
-```
-
-**What to observe:** In the Temporal UI, child workflows appear nested under the parent. Each has its own event history, timing, and retry state.
-
----
-
-## Stochastic Agents
-
-**File:** [`examples/stochastic_agents.py`](../examples/stochastic_agents.py)
+**File:** [`examples/multiagent_system.py`](../examples/multiagent_system.py)
 
 **This is the flagship example.** An orchestrator agent with both sub-agents and regular tools in the same list. The LLM freely decides:
 
@@ -165,18 +129,21 @@ all_tools = [
 
 @dura
 async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-    # ... standard dispatch loop ...
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+    return result["messages"][-1].content
 ```
 
-**What to observe:** Run this example multiple times. The execution path is different every run — but every operation is individually durable. If any call fails, only that call retries.
+**What to observe:** Run this example multiple times. The execution path is different every run — but every operation is individually durable. If any call fails, only that call retries. In the Temporal UI, child workflows appear nested under the parent, each with its own event history.
 
 ---
 
-## Multi-Agent Pipeline
+## Sequential Agents
 
-**File:** [`examples/multiagent_system.py`](../examples/multiagent_system.py)
+**File:** [`examples/sequential_agents.py`](../examples/sequential_agents.py)
 
 A fixed three-stage pipeline where each stage is a `@dura` agent with its own tools:
 

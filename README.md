@@ -383,9 +383,8 @@ The [`examples/`](examples/) directory contains runnable demos:
 | [`basic_agent.py`](examples/basic_agent.py) | Standard LangChain agent with `@dura` |
 | [`multi_tool.py`](examples/multi_tool.py) | Parallel tool execution with `asyncio.gather` |
 | [`multi_model.py`](examples/multi_model.py) | Same agent code with different LLM providers |
-| [`multi_agent.py`](examples/multi_agent.py) | Direct `@dura` → `@dura` calls and `dura_agent_tool()` |
-| [`stochastic_agents.py`](examples/stochastic_agents.py) | Fully stochastic orchestrator with mixed agent/tool dispatch |
-| [`multiagent_system.py`](examples/multiagent_system.py) | Multi-agent pipeline: research → analyze → write |
+| [`multiagent_system.py`](examples/multiagent_system.py) | Multi-agent orchestrator with mixed agent/tool dispatch |
+| [`sequential_agents.py`](examples/sequential_agents.py) | Sequential pipeline: research → analyze → write |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP filesystem server with `DuraMCPSession` |
 | [`crash_recovery.py`](examples/crash_recovery.py) | Automatic retry + process crash recovery demo |
 | [`human_in_loop.py`](examples/human_in_loop.py) | Human-in-the-loop pattern (v2 preview) |
