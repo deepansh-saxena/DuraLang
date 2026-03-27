@@ -120,23 +120,7 @@ See [`crash_recovery.py`](examples/crash_recovery.py) for the full working demo.
 
 Sub-agents run as **independent durable units** — each with its own retry boundaries and timeouts. Two patterns:
 
-**Pattern 1: Direct calls** — your code decides which agents to call:
-
-```python
-@dura
-async def researcher(query: str) -> str:
-    """Research agent with web search tools."""
-    ...
-
-@dura
-async def orchestrator(task: str) -> str:
-    research = await researcher(f"Research: {task}")  # → independent sub-agent
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    response = await llm.ainvoke([HumanMessage(content=f"Summarize: {research}")])
-    return response.content
-```
-
-**Pattern 2: Agent tools** — the LLM decides which agents to call:
+**Pattern 1: Agent tools** — the LLM decides which agents to call:
 
 ```python
 from duralang import dura, dura_agent_tool
@@ -163,6 +147,22 @@ async def orchestrator(task: str) -> str:
             # Same ainvoke() for agents and tools. Routing is automatic.
             result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    return response.content
+```
+
+**Pattern 2: Direct calls** — your code decides which agents to call:
+
+```python
+@dura
+async def researcher(query: str) -> str:
+    """Research agent with web search tools."""
+    ...
+
+@dura
+async def orchestrator(task: str) -> str:
+    research = await researcher(f"Research: {task}")  # → independent sub-agent
+    llm = ChatAnthropic(model="claude-sonnet-4-6")
+    response = await llm.ainvoke([HumanMessage(content=f"Summarize: {research}")])
     return response.content
 ```
 
