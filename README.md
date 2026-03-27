@@ -62,7 +62,7 @@ async def my_agent(messages):
     return messages
 ```
 
-**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every `ainvoke()` call is now a durable Temporal Activity with automatic retries, heartbeating, and state checkpointing.
+**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every `ainvoke()` call is now a durable Temporal Activity — automatically retried, heartbeated, and recorded in Temporal's event history.
 
 > **The LLM is stochastic and decides everything.**
 > duralang does not change that.
@@ -76,11 +76,11 @@ async def my_agent(messages):
 
 ```mermaid
 graph TD
-    A["① llm.ainvoke()"] -->|"✓ success"| B["state checkpointed"]
+    A["① llm.ainvoke()"] -->|"✓ success"| B["result saved to event history"]
     B --> C["② tool.ainvoke()"]
     C -->|"✗ timeout"| D["automatic retry"]
     D -->|"backoff + heartbeat"| E["② tool.ainvoke()"]
-    E -->|"✓ retry succeeds"| F["state checkpointed"]
+    E -->|"✓ retry succeeds"| F["result saved to event history"]
     F --> G["③ llm.ainvoke()"]
     G -->|"✓ success"| H["✅ DONE"]
 
@@ -94,7 +94,7 @@ graph TD
     style H fill:#3b82f6,color:#fff
 ```
 
-**Only the failed operation retries.** Step ① is replayed from Temporal's event history — not re-executed. No wasted API calls. No wasted money. No lost progress.
+**Only the failed operation retries.** On recovery, Temporal replays the workflow logic from the beginning — but completed steps return their stored results instantly (no API calls re-made). No wasted money. No lost progress.
 
 ### Process Crash Recovery
 
@@ -105,7 +105,7 @@ If the entire worker process dies (OOM, hardware failure, deployment), Temporal 
 python examples/crash_recovery.py --crash
 # Process killed ☠️
 
-# Second run — resumes from checkpoint, steps 1-3 NOT re-executed
+# Second run — Temporal replays event history, steps 1-3 NOT re-executed
 python examples/crash_recovery.py --crash
 # ✓ Completed (no LLM calls re-made, no money wasted)
 ```
@@ -214,7 +214,7 @@ Every execution is fully inspectable in the **Temporal UI** at `http://localhost
 - **Per-call timeline:** Every LLM call, tool call, and agent call with inputs, outputs, latency, and attempt count
 - **Retry history:** Exactly which calls failed, when, and how many attempts were needed
 - **Workflow hierarchy:** Parent → child agent nesting visible as a tree
-- **Full state at every checkpoint:** See the complete durable state after each operation
+- **Full event history:** See the complete durable state after each operation
 - **Replayable:** Temporal's event history is a deterministic record of the entire execution
 
 > **No equivalent exists for free.** LangSmith charges per trace. OpenTelemetry requires setup and a backend. With duralang, observability is automatic — every `@dura` function is fully traced in the Temporal UI with zero configuration.
@@ -230,7 +230,7 @@ Every operation gets the full durability stack automatically:
 | **Retries** | Exponential backoff on transient failures | 3 attempts, 2× backoff |
 | **Timeouts** | Bounded execution per operation | 10 min (LLM), 2 min (tool), 5 min (MCP) |
 | **Heartbeating** | Detects hung operations (distinguishes "still thinking" from "stuck") | 5 min (LLM), 30s (tool/MCP) |
-| **State** | Durable checkpoint after each operation | Automatic via Temporal history |
+| **State** | Every step outcome recorded in event history | Automatic — enables deterministic replay |
 
 Non-retryable errors (e.g., `ValueError`, `TypeError`) fail immediately. Transient errors (timeouts, rate limits, network failures) are retried automatically.
 
@@ -331,7 +331,7 @@ async with ClientSession(read, write) as session:
 | | LangGraph | duralang |
 |---|---|---|
 | **Execution** | Graph nodes + edges | Free-form async loops |
-| **Durability** | Per-node checkpoint | Per-operation (`ainvoke()` level) |
+| **Durability** | Per-node checkpoint (snapshot) | Per-operation event history (replay) |
 | **Code change** | Restructure into graph | Add `@dura` |
 | **Recovery** | Re-execute entire node | Retry only the failed call |
 | **Best for** | Known workflow topology | Stochastic, LLM-driven loops |
@@ -359,7 +359,7 @@ async def my_agent(task):
 That's the entire mental model:
 
 - **`@dura`** on your function → makes it a Temporal Workflow
-- **`ainvoke()` calls inside** → each becomes a retryable, checkpointed Temporal Activity
+- **`ainvoke()` calls inside** → each becomes a retryable Temporal Activity with its outcome recorded in event history
 - **`@dura` calling `@dura`** → becomes a Child Workflow with its own state
 - **Remove `@dura`** → everything runs as vanilla LangChain
 
