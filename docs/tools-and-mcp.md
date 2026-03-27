@@ -9,6 +9,7 @@ DuraLang supports three types of tool integrations: **LangChain tools**, **agent
 Standard LangChain `@tool` functions work inside `@dura` with zero changes. Every `tool.ainvoke()` call becomes a `dura__tool` Temporal Activity — automatically retried, heartbeated, and checkpointed.
 
 ```python
+from langchain.agents import create_agent
 from langchain_core.tools import tool
 from duralang import dura
 
@@ -23,22 +24,15 @@ def get_time(timezone: str) -> str:
     return f"3:00 PM in {timezone}"
 
 tools = [get_weather, get_time]
-tools_by_name = {t.name: t for t in tools}
 
 @dura
 async def my_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)   # → dura__llm Activity
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → dura__tool Activity
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=tools,
+    )
+    result = await agent.ainvoke({"messages": messages})   # → dura__llm + dura__tool Activities
+    return result["messages"]
 ```
 
 ### Auto-Registration
@@ -52,32 +46,21 @@ You never call `register_tools()`. There is no such function. Registration is fu
 
 ### Parallel Tool Calls
 
-If the LLM returns multiple tool calls, you can execute them in parallel with `asyncio.gather`. Each tool call becomes its own `dura__tool` Activity, scheduled concurrently by Temporal:
+When the LLM returns multiple tool calls, `create_agent` handles parallel dispatch automatically. Each tool call becomes its own `dura__tool` Activity, scheduled concurrently by Temporal:
 
 ```python
-import asyncio
+from langchain.agents import create_agent
 
 @dura
 async def my_agent(messages):
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-
-        # Parallel — each becomes an independent durable Activity
-        tasks = [
-            tools_by_name[tc["name"]].ainvoke(tc["args"])
-            for tc in response.tool_calls
-        ]
-        results = await asyncio.gather(*tasks)
-
-        for tc, result in zip(response.tool_calls, results):
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=tools,
+    )
+    # create_agent handles parallel tool calls automatically —
+    # each becomes an independent durable Activity
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 ```
 
 ---
@@ -98,24 +81,18 @@ Without `dura_agent_tool()`, you have two patterns for multi-agent:
 ### Usage
 
 ```python
+from langchain.agents import create_agent
 from duralang import dura, dura_agent_tool
 
 @dura
 async def researcher(query: str) -> str:
     """Research agent — gathers information via web search."""
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools([web_search, wikipedia_lookup])
-
-    messages = [HumanMessage(content=query)]
-    for _ in range(10):
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return response.content
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=[web_search, wikipedia_lookup],
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=query)]})
+    return result["messages"][-1].content
 
 @dura
 async def analyst(data: str, question: str) -> str:
@@ -128,24 +105,16 @@ all_tools = [
     dura_agent_tool(analyst),      # → Temporal Child Workflow
     calculator,                     # → dura__tool Activity
 ]
-tools_by_name = {t.name: t for t in all_tools}
 
 @dura
 async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-
-    messages = [HumanMessage(content=task)]
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            # Same ainvoke() — DuraLang routes automatically
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return response.content
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,
+    )
+    # create_agent handles dispatch — DuraLang routes automatically
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+    return result["messages"][-1].content
 ```
 
 ### How It Works Under the Hood
@@ -250,14 +219,7 @@ All three tool types can coexist in the same agent. DuraLang routes each call to
 | `DuraMCPSession.call_tool()` | `DuraMCPProxy` | `dura__mcp` Activity | Parent workflow |
 | `@dura` calling `@dura` directly | Decorator detects context | Child Workflow | Own workflow |
 
-The dispatch loop is identical for all tool types:
-
-```python
-for tc in response.tool_calls:
-    result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-    # ↑ DuraLang decides: dura__tool Activity or Child Workflow
-    messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-```
+`create_agent` handles dispatch for all tool types — DuraLang decides whether each call becomes a `dura__tool` Activity or a Child Workflow automatically.
 
 ---
 
@@ -266,6 +228,7 @@ for tc in response.tool_calls:
 A single agent can use all three tool types simultaneously:
 
 ```python
+from langchain.agents import create_agent
 from duralang import dura, dura_agent_tool, DuraMCPSession
 
 # Regular tools
@@ -285,29 +248,21 @@ all_tools = [
     dura_agent_tool(researcher),   # → Child Workflow
     calculator,                     # → dura__tool Activity
 ]
-tools_by_name = {t.name: t for t in all_tools}
 
 # MCP server
 fs = DuraMCPSession(mcp_session, "filesystem")
 
 @dura
 async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-
-    messages = [HumanMessage(content=task)]
-    while True:
-        response = await llm_with_tools.ainvoke(messages)       # → dura__llm
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
 
     # MCP call alongside everything else
     data = await fs.call_tool("read_file", {"path": "/tmp/report.csv"})  # → dura__mcp
-    return response.content
+    return result["messages"][-1].content
 ```
 
 The LLM sees a flat list of tools. DuraLang routes each call to the right Temporal primitive automatically. Every operation is individually durable.

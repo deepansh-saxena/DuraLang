@@ -1,14 +1,14 @@
 """Convenience layer for exposing @dura functions as LangChain tools.
 
 Wraps a @dura-decorated function in a real BaseTool subclass so it can be
-mixed with regular @tool functions in the same bind_tools() call and the
-same ainvoke() dispatch loop.
+used with ``create_agent`` alongside regular @tool functions.
 
 Under the hood, calling an agent tool from within a @dura context triggers
 a Temporal Child Workflow (not a dura__tool activity), giving the sub-agent
 its own event history, timeouts, and retry boundaries.
 
 Usage:
+    from langchain.agents import create_agent
     from duralang import dura, dura_agent_tool
 
     @dura
@@ -31,13 +31,13 @@ Usage:
 
     @dura
     async def orchestrator(task: str) -> str:
-        llm = ChatAnthropic(model="claude-sonnet-4-6")
-        llm_with_tools = llm.bind_tools(all_tools)
-        tools_by_name = {t.name: t for t in all_tools}
-
-        # Same loop handles both agent tools and regular tools
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
+        agent = create_agent(
+            model="claude-sonnet-4-6",
+            tools=all_tools,
+        )
+        # create_agent handles dispatch for both agent tools and regular tools
+        result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+        return result["messages"][-1].content
 """
 
 import inspect

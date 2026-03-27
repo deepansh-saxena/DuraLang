@@ -43,25 +43,19 @@ python examples/basic_agent.py
 The simplest possible DuraLang agent. A standard LangChain agent loop — the only addition is `@dura` on the function definition.
 
 ```python
+from langchain.agents import create_agent
 from duralang import dura
 
 tools = [TavilySearchResults(max_results=3)]
-tools_by_name = {t.name: t for t in tools}
 
 @dura
 async def research_agent(messages: list) -> list:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)   # → dura__llm Activity
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → dura__tool Activity
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=tools,
+    )
+    result = await agent.ainvoke({"messages": messages})   # → dura__llm + dura__tool Activities
+    return result["messages"]
 ```
 
 **What to observe in Temporal UI (`localhost:8233`):**
@@ -75,15 +69,20 @@ async def research_agent(messages: list) -> list:
 
 **File:** [`examples/multi_tool.py`](../examples/multi_tool.py)
 
-Demonstrates parallel tool execution with `asyncio.gather`. When the LLM returns multiple tool calls, each runs as its own Temporal Activity — scheduled concurrently:
+Demonstrates parallel tool execution. When the LLM returns multiple tool calls, `create_agent` handles parallel dispatch automatically — each tool call runs as its own Temporal Activity, scheduled concurrently:
 
 ```python
-# Parallel tool execution — each becomes its own Temporal Activity
-tasks = [tools_by_name[tc["name"]].ainvoke(tc["args"]) for tc in response.tool_calls]
-results = await asyncio.gather(*tasks)
+from langchain.agents import create_agent
+
+agent = create_agent(
+    model="claude-sonnet-4-6",
+    tools=tools,
+)
+# create_agent handles parallel tool calls automatically
+result = await agent.ainvoke({"messages": messages})
 ```
 
-**What to observe:** In the Temporal UI, parallel activities overlap in the timeline. Both complete independently — if one fails and retries, the other's result is already checkpointed.
+**What to observe:** In the Temporal UI, parallel activities overlap in the timeline. Both complete independently — if one fails and retries, the other's result is already checkpointed. Note: `create_agent` handles parallel tool dispatch automatically — no manual `asyncio.gather` needed.
 
 ---
 

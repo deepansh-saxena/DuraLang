@@ -136,29 +136,22 @@ The sub-agent gets its own event history, timeouts, and retry boundaries. Failur
 ### Example
 
 ```python
+from langchain.agents import create_agent
+
 all_tools = [
     dura_agent_tool(researcher),   # → Child Workflow
     dura_agent_tool(analyst),      # → Child Workflow
     calculator,                     # → dura__tool Activity
 ]
-tools_by_name = {t.name: t for t in all_tools}
 
 @dura
 async def orchestrator(task: str) -> str:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(all_tools)
-
-    messages = [HumanMessage(content=task)]
-    while True:
-        response = await llm_with_tools.ainvoke(messages)
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            # Same ainvoke() for agents and tools — routing is automatic
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-    return response.content
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=all_tools,
+    )
+    result = await agent.ainvoke({"messages": [HumanMessage(content=task)]})
+    return result["messages"][-1].content
 ```
 
 ---

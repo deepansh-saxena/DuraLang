@@ -57,30 +57,22 @@ Create a file called `my_agent.py`:
 
 ```python
 import asyncio
-from langchain_anthropic import ChatAnthropic
+from langchain.agents import create_agent
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from duralang import dura
 
 # Standard LangChain tool
 tools = [TavilySearchResults(max_results=3)]
-tools_by_name = {t.name: t for t in tools}
 
 @dura  # ← This is the only DuraLang-specific line
 async def research_agent(messages: list) -> list:
-    llm = ChatAnthropic(model="claude-sonnet-4-6")
-    llm_with_tools = llm.bind_tools(tools)
-
-    while True:
-        response = await llm_with_tools.ainvoke(messages)   # → Temporal Activity
-        messages.append(response)
-        if not response.tool_calls:
-            break
-        for tc in response.tool_calls:
-            result = await tools_by_name[tc["name"]].ainvoke(tc["args"])  # → Temporal Activity
-            messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
-
-    return messages
+    agent = create_agent(
+        model="claude-sonnet-4-6",
+        tools=tools,
+    )
+    result = await agent.ainvoke({"messages": messages})   # → Temporal Activities
+    return result["messages"]
 
 async def main():
     result = await research_agent(
