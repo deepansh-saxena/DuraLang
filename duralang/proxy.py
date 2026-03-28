@@ -25,11 +25,31 @@ from duralang.registry import ToolRegistry
 from duralang.state import MessageSerializer
 
 
-def _extract_bound_tool_schemas(llm_instance) -> list[dict]:
+def _extract_bound_tool_schemas(llm_instance, invoke_kwargs: dict | None = None) -> list[dict]:
     """Extracts tool schemas from a BaseChatModel that has had bind_tools() called.
+
+    Checks two sources:
+    1. invoke_kwargs["tools"] — tools passed via RunnableBinding (from bind_tools).
+       This is the path used when create_agent internally binds tools.
+    2. llm_instance.tools / llm_instance._tools — tools stored directly on the model.
 
     Also auto-registers each BaseTool in ToolRegistry so dura__tool can find it.
     """
+    # First check kwargs — this is how tools arrive from RunnableBinding/bind_tools
+    tools_from_kwargs = (invoke_kwargs or {}).get("tools", None)
+    if tools_from_kwargs:
+        schemas = []
+        for tool in tools_from_kwargs:
+            if hasattr(tool, "name") and hasattr(tool, "args_schema"):
+                ToolRegistry.register(tool)
+                if tool.args_schema:
+                    schemas.append(tool.args_schema.model_json_schema())
+            elif isinstance(tool, dict):
+                schemas.append(tool)
+        if schemas:
+            return schemas
+
+    # Fallback: check instance attributes
     tools = getattr(llm_instance, "tools", None) or getattr(
         llm_instance, "_tools", None
     ) or []
@@ -37,7 +57,6 @@ def _extract_bound_tool_schemas(llm_instance) -> list[dict]:
     schemas = []
     for tool in tools:
         if hasattr(tool, "name") and hasattr(tool, "args_schema"):
-            # It's a BaseTool — register it and get its schema
             ToolRegistry.register(tool)
             if tool.args_schema:
                 schemas.append(tool.args_schema.model_json_schema())
@@ -68,11 +87,18 @@ class DuraLLMProxy:
                 return await original_ainvoke(messages, *args, **kwargs)
 
             llm_identity = LLMIdentity.from_instance(original_instance)
-            tool_schemas = _extract_bound_tool_schemas(original_instance)
+            tool_schemas = _extract_bound_tool_schemas(original_instance, invoke_kwargs=kwargs)
 
             serialized_messages = MessageSerializer.serialize_many(
                 messages if isinstance(messages, list) else [messages]
             )
+
+            # Strip tool-related kwargs — they're captured in tool_schemas
+            # and will be re-bound via bind_tools() in the activity.
+            filtered_kwargs = {
+                k: v for k, v in kwargs.items()
+                if k not in ("tools", "tool_choice")
+            }
 
             result: LLMActivityResult = await ctx.execute_activity(
                 "dura__llm",
@@ -84,7 +110,7 @@ class DuraLLMProxy:
                         "kwargs": llm_identity.kwargs,
                     },
                     tool_schemas=tool_schemas,
-                    invoke_kwargs=_safe_kwargs(kwargs),
+                    invoke_kwargs=_safe_kwargs(filtered_kwargs),
                 ),
                 ctx.config.llm_config,
             )
@@ -94,7 +120,12 @@ class DuraLLMProxy:
 
 
 class DuraToolProxy:
-    """Intercepts BaseTool.ainvoke() inside a dura context."""
+    """Intercepts BaseTool.ainvoke() inside a dura context.
+
+    Important: BaseTool.ainvoke → arun → _arun → _format_output wraps the raw
+    result into a ToolMessage. Since we replace ainvoke, we must return a
+    ToolMessage ourselves to satisfy LangGraph's ToolNode expectations.
+    """
 
     @staticmethod
     def make_ainvoke(original_ainvoke, original_instance):
@@ -111,18 +142,38 @@ class DuraToolProxy:
 
             tool_input = input if isinstance(input, (dict, str)) else str(input)
 
+            # Extract tool_call_id from input (ToolCall dict) or kwargs
+            tool_call_id = ""
+            if isinstance(input, dict) and "id" in input:
+                tool_call_id = input["id"]
+            if not tool_call_id:
+                tool_call_id = kwargs.get("tool_call_id", "")
+
             result: ToolActivityResult = await ctx.execute_activity(
                 "dura__tool",
                 ToolActivityPayload(
                     tool_name=original_instance.name,
                     tool_input=tool_input,
-                    tool_call_id=kwargs.get("tool_call_id", ""),
+                    tool_call_id=tool_call_id,
                 ),
                 ctx.config.tool_config,
             )
-            if result.error:
-                return result.error
-            return result.output
+
+            from langchain_core.messages import ToolMessage
+
+            content = result.error if result.error else result.output
+            status = "error" if result.error else "success"
+
+            # Return ToolMessage to match what BaseTool.ainvoke normally returns.
+            # LangGraph's ToolNode expects ToolMessage, not raw strings.
+            if tool_call_id:
+                return ToolMessage(
+                    content=content,
+                    tool_call_id=tool_call_id,
+                    name=original_instance.name,
+                    status=status,
+                )
+            return content
 
         return ainvoke_proxy
 
@@ -192,11 +243,45 @@ def _install_tool_proxy(instance) -> None:
 
 # ── Monkey-patching at import time ──────────────────────────────────────────
 
+
+def _install_eager_task_patch() -> None:
+    """Patch asyncio.eager_task_factory for Temporal compatibility.
+
+    On Python 3.12+, LangGraph uses asyncio.eager_task_factory() to create
+    tasks. This bypasses loop.create_task(), so tasks are NOT registered in
+    Temporal's _tasks set. Without a strong reference, these tasks get
+    garbage-collected while still pending — causing "Task was destroyed but
+    it is pending!" warnings and silently lost work.
+
+    This patch detects Temporal's workflow event loop (via the
+    __temporal_workflow_runtime attribute) and routes through
+    loop.create_task() instead, ensuring proper task registration.
+    Non-Temporal event loops are unaffected.
+    """
+    import asyncio
+    import sys
+
+    if sys.version_info < (3, 12):
+        return  # eager_task_factory doesn't exist before 3.12
+
+    _original_eager_factory = asyncio.eager_task_factory
+
+    def _temporal_safe_eager_factory(loop, coro, *, name=None, context=None):
+        if hasattr(loop, "__temporal_workflow_runtime"):
+            return loop.create_task(coro, name=name, context=context)
+        return _original_eager_factory(loop, coro, name=name, context=context)
+
+    asyncio.eager_task_factory = _temporal_safe_eager_factory
+
+
 _patched = False
 
 
 def install_patches() -> None:
     """Patch BaseChatModel.__init__ and BaseTool.__init__ to install proxies.
+
+    Also patches asyncio.eager_task_factory to ensure tasks created inside
+    Temporal workflows are properly registered with the workflow event loop.
 
     Called at duralang import time. Safe to call multiple times.
     """
@@ -225,3 +310,5 @@ def install_patches() -> None:
         _install_tool_proxy(self)
 
     BaseTool.__init__ = _patched_tool_init
+
+    _install_eager_task_patch()

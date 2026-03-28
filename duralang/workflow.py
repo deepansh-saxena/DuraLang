@@ -31,6 +31,21 @@ with workflow.unsafe.imports_passed_through():
     from duralang.runner import _resolve_callable, _get_fn_path, _serialize_config
     from duralang.state import ArgSerializer
 
+    # Pre-import LangChain modules to avoid Temporal's 2-second deadlock
+    # detector triggering during lazy imports inside the workflow.
+    # init_chat_model("claude-sonnet-4-6") triggers a chain of imports
+    # (langchain_anthropic → yaml → etc.) that can exceed 2 seconds.
+    import langchain.agents  # noqa: F401
+
+    try:
+        import langchain_anthropic  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import langchain_openai  # noqa: F401
+    except ImportError:
+        pass
+
 
 @workflow.defn(name="DuraLangWorkflow", sandboxed=False)
 class DuraLangWorkflow:

@@ -44,9 +44,10 @@ class DuraConfig:
             start_to_close_timeout=timedelta(minutes=10),
             heartbeat_timeout=timedelta(minutes=5),  # LLM calls can take 30-120s; generous timeout
             retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
+                initial_interval=timedelta(seconds=15),
                 backoff_coefficient=2.0,
-                maximum_attempts=3,
+                maximum_attempts=10,
+                maximum_interval=timedelta(minutes=2),
                 non_retryable_error_types=["ValueError", "TypeError"],
             ),
         )

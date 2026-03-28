@@ -57,15 +57,18 @@ async def llm_activity(payload: LLMActivityPayload) -> LLMActivityResult:
     )
     llm = build_llm_from_identity(identity)
 
-    # 2. Rebind tools if any were bound
-    if payload.tool_schemas:
-        llm = llm.bind_tools(payload.tool_schemas)
-
-    # 3. Deserialize messages
+    # 2. Deserialize messages
     messages = MessageSerializer.deserialize_many(payload.messages)
 
-    # 4. Invoke LLM
-    response = await llm.ainvoke(messages, **payload.invoke_kwargs)
+    # 3. Invoke LLM — pass tool schemas directly as kwargs.
+    # The schemas arrive in provider-specific format (e.g. Anthropic format
+    # from bind_tools), so we pass them as-is rather than calling bind_tools()
+    # again which would double-convert.
+    invoke_kwargs = dict(payload.invoke_kwargs)
+    if payload.tool_schemas:
+        invoke_kwargs["tools"] = payload.tool_schemas
+
+    response = await llm.ainvoke(messages, **invoke_kwargs)
 
     activity.heartbeat("llm: inference complete")
 

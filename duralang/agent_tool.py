@@ -117,7 +117,12 @@ def dura_agent_tool(
         __dura_agent_tool__: bool = True
 
         async def _arun(self, **kwargs: Any) -> str:
-            result = await _dura_fn(**kwargs)
+            # Filter to only the parameters the @dura function expects.
+            # LangChain/LangGraph may inject extra kwargs (run_manager, config, etc.)
+            # that the user function doesn't accept.
+            expected = set(args_model.model_fields.keys())
+            filtered = {k: v for k, v in kwargs.items() if k in expected}
+            result = await _dura_fn(**filtered)
             return str(result) if result is not None else ""
 
         def _run(self, **kwargs: Any) -> str:

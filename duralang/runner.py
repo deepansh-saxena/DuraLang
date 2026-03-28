@@ -118,6 +118,27 @@ def _get_fn_path(fn: Any) -> str:
 
     module = original.__module__
     qualname = original.__qualname__
+
+    # When run as `python script.py`, __module__ is "__main__".
+    # Resolve to the real module path so child workflows can find
+    # the function even if the worker restarts with a different entry point.
+    if module == "__main__":
+        import sys
+
+        main_mod = sys.modules.get("__main__")
+        if main_mod and hasattr(main_mod, "__spec__") and main_mod.__spec__:
+            module = main_mod.__spec__.name
+        elif main_mod and hasattr(main_mod, "__file__") and main_mod.__file__:
+            import os
+
+            # Convert file path to module path
+            file_path = os.path.abspath(main_mod.__file__)
+            for path in sorted(sys.path, key=len, reverse=True):
+                if path and file_path.startswith(path):
+                    rel = os.path.relpath(file_path, path)
+                    module = rel.replace(os.sep, ".").removesuffix(".py")
+                    break
+
     return f"{module}:{qualname}"
 
 

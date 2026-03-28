@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from langchain_core.tools import BaseTool
 
 from duralang.agent_tool import dura_agent_tool
+from duralang.config import DuraConfig
+from duralang.context import DuraContext
 from duralang.decorator import dura
 from duralang.exceptions import ConfigurationError
 
@@ -110,6 +114,50 @@ class TestDuraAgentTool:
         tool = dura_agent_tool(search_agent)
         with pytest.raises(NotImplementedError, match="async-only"):
             tool._run(query="test")
+
+    @pytest.mark.asyncio
+    async def test_arun_filters_unexpected_kwargs(self):
+        """_arun should ignore kwargs not in the function signature."""
+        tool = dura_agent_tool(search_agent)
+        original_fn = search_agent.__wrapped__
+
+        async def mock_child(fn, args, kwargs):
+            return await original_fn(*args, **kwargs)
+
+        ctx = DuraContext(
+            workflow_id="test",
+            config=DuraConfig(),
+            execute_activity=AsyncMock(),
+            execute_child_agent=mock_child,
+        )
+        token = DuraContext.set(ctx)
+        try:
+            result = await tool._arun(query="test", run_manager=object(), config={"key": "val"})
+        finally:
+            DuraContext.reset(token)
+        assert result == "results for test"
+
+    @pytest.mark.asyncio
+    async def test_arun_passes_expected_kwargs(self):
+        """_arun should pass through all expected parameters."""
+        tool = dura_agent_tool(analysis_agent)
+        original_fn = analysis_agent.__wrapped__
+
+        async def mock_child(fn, args, kwargs):
+            return await original_fn(*args, **kwargs)
+
+        ctx = DuraContext(
+            workflow_id="test",
+            config=DuraConfig(),
+            execute_activity=AsyncMock(),
+            execute_child_agent=mock_child,
+        )
+        token = DuraContext.set(ctx)
+        try:
+            result = await tool._arun(data="nums", question="what trend?", extra_junk="ignore")
+        finally:
+            DuraContext.reset(token)
+        assert result == "analysis of nums: what trend?"
 
 
 # ── Mixing with regular tools ────────────────────────────────────────────────
