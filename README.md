@@ -26,6 +26,16 @@ Write the same LangChain code you already know — add <code>@dura</code> — an
 
 The model picked the right tool. The reasoning was correct. But a network timeout at minute 47 of a 60-minute run killed the entire pipeline — and you lost every completed step along with it.
 
+**Modern AI agents are stochastic systems.**  
+The LLM decides the execution path at runtime — what tools to call, in what order, and how many times.
+
+**But durability frameworks assume deterministic workflows.**  
+They expect predefined graphs, fixed execution paths, and known structure ahead of time.
+
+**The result:** stochastic agent workflows today have **no native durability model.**
+
+---
+
 This is the reality of production agent systems today:
 
 - **LangChain** gives you the best composability layer for LLM applications. But it does **not** provide built-in durability for long-running agent execution. If a call fails mid-run, execution typically fails unless you add your own recovery logic. Framework-level durable state persistence, checkpointed resume, and centralized retry/timeout policy management are not built in.
