@@ -11,7 +11,7 @@ Write the same LangChain code you already know — add <code>@dura</code> — an
 
 <p><strong>No new framework. No graph DSL. No code rewrite. Just durability.</strong></p>
 
-[![PyPI 0.1.0](https://img.shields.io/pypi/v/duralang)](https://pypi.org/project/duralang/)
+[![PyPI](https://img.shields.io/pypi/v/duralang?cacheSeconds=300)](https://pypi.org/project/duralang/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Temporal](https://img.shields.io/badge/powered%20by-Temporal-black)](https://temporal.io)
