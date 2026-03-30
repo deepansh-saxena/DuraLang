@@ -183,6 +183,12 @@ Every execution is fully inspectable in the **Temporal UI** at `http://localhost
 - **Full event history:** See the complete durable state after each operation
 - **Replayable:** Temporal's event history is a deterministic record of the entire execution
 
+Below are example screenshots from the Temporal UI:
+
+![Temporal UI child workflow run](https://github.com/user-attachments/assets/f58c01a9-4ff1-4254-aba5-f182c002bbc6)
+![Temporal UI workflow timeline](https://github.com/user-attachments/assets/b729d530-14fb-44a3-86e1-459fc0b30a94)
+![Temporal UI event history view](https://github.com/user-attachments/assets/cc5ac8e7-1c56-4415-b927-d40508d85e88)
+
 > **No equivalent exists for free.** LangSmith charges per trace. OpenTelemetry requires setup and a backend. With duralang, observability is automatic — every `@dura` function is fully traced in the Temporal UI with zero configuration.
 
 ---
