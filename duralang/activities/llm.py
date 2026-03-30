@@ -5,6 +5,8 @@ Reconstructs the LLM from LLMIdentity, rebinds tools, invokes, returns serialize
 
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from duralang.config import LLMIdentity
@@ -22,7 +24,10 @@ def _normalize_content(content) -> str:
 
 def build_llm_from_identity(identity: LLMIdentity):
     """Instantiate a LangChain chat model from LLMIdentity."""
-    kwargs = {k: v for k, v in identity.kwargs.items() if v is not None}
+    from duralang.config import _SAFE_LLM_KWARGS
+
+    kwargs = {k: v for k, v in identity.kwargs.items()
+              if v is not None and k in _SAFE_LLM_KWARGS}
 
     if identity.provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -68,7 +73,21 @@ async def llm_activity(payload: LLMActivityPayload) -> LLMActivityResult:
     if payload.tool_schemas:
         invoke_kwargs["tools"] = payload.tool_schemas
 
-    response = await llm.ainvoke(messages, **invoke_kwargs)
+    from duralang.activities._heartbeat import with_heartbeats
+
+    try:
+        response = await with_heartbeats(
+            llm.ainvoke(messages, **invoke_kwargs),
+            message="llm: inference in progress",
+            interval=15.0,
+        )
+    except asyncio.CancelledError:
+        activity.heartbeat("cancelled — cleaning up")
+        raise
+    except Exception as e:
+        from duralang.exceptions import LLMActivityError
+
+        raise LLMActivityError(f"LLM inference failed: {type(e).__name__}: {e}") from e
 
     activity.heartbeat("llm: inference complete")
 

@@ -34,7 +34,7 @@ The caller doesn't know Temporal is involved. The function signature doesn't cha
 
 ### Layer 2: Call Interception via Proxies
 
-Before your function body executes inside the Temporal worker, DuraLang sets a `DuraContext` flag using Python's `contextvars.ContextVar`. Every `BaseChatModel` and `BaseTool` instance has proxy methods installed at import time that check this flag:
+Before your function body executes inside the Temporal worker, DuraLang sets a `DuraContext` flag using Python's `contextvars.ContextVar`. `dura_agent()` wraps your model and tools with durable subclasses (`DuraModel`, `DuraTool`) that check this flag on every call:
 
 - **Inside `@dura`** → `llm.ainvoke()` routes to a Temporal Activity (retried, heartbeated, durable)
 - **Outside `@dura`** → `llm.ainvoke()` calls the original method normally (standard LangChain behavior)
@@ -49,9 +49,10 @@ Every intercepted call maps to one of three Temporal Activities:
 |---|---|---|
 | `llm.ainvoke(messages)` | `dura__llm` Activity | LLM instance reconstructed from `LLMIdentity`, messages deserialized, inference executed, result checkpointed |
 | `tool.ainvoke(input)` | `dura__tool` Activity | Tool looked up in `ToolRegistry` by name, executed, result checkpointed |
-| `session.call_tool(...)` | `dura__mcp` Activity | MCP session looked up in `MCPSessionRegistry`, tool called, result checkpointed |
+| MCP tool (via `langchain-mcp-adapters`) | `dura__tool` Activity | MCP tools converted to `BaseTool` by `langchain-mcp-adapters`, then wrapped by `dura_agent()` as `DuraTool` — same path as any other tool |
 | `@dura` calling `@dura` | Child Workflow | Sub-agent gets its own event history, timeouts, and retry boundaries |
-| `dura_agent_tool(fn).ainvoke(args)` | Child Workflow | Same as above, but triggered through the LangChain `BaseTool` interface |
+| `@dura` fn as tool (auto-wrapped) | Child Workflow | Same as above, but triggered through the LangChain `BaseTool` interface |
+| `session.call_tool(...)` *(legacy)* | `dura__mcp` Activity | Legacy path via `DuraMCPProxy`. Prefer `langchain-mcp-adapters` instead |
 
 Each activity is individually retryable, heartbeated, and checkpointed. If any operation fails, only that operation retries — everything before it is preserved in Temporal's event history.
 
@@ -100,19 +101,21 @@ The LLM object itself never touches Temporal's serializer. Only the identity cro
 
 ## Auto-Registration
 
-DuraLang automatically registers tools so that the `dura__tool` Activity can find them by name. This happens at two points:
-
-1. **At `BaseTool.__init__` time** — when any LangChain tool is instantiated, the patched `__init__` method registers it in `ToolRegistry`
-2. **At `bind_tools()` time** — when the proxy extracts tool schemas for the LLM payload, it registers each `BaseTool` it finds
+DuraLang automatically registers tools so that the `dura__tool` Activity can find them by name. This happens when `DuraTool` wraps a tool — `dura_agent()` does this automatically for every tool in its `tools` list.
 
 You never call `register_tools()`. It doesn't exist. Registration is fully automatic.
 
-For MCP sessions, registration happens when you create a `DuraMCPSession`:
+For MCP tools, use [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to convert MCP server tools into standard `BaseTool` instances, then pass them to `dura_agent()` like any other tool:
 
 ```python
-fs = DuraMCPSession(session, "filesystem")
-# ↑ This registers the session in MCPSessionRegistry with key "filesystem"
+from langchain_mcp_adapters.tools import load_mcp_tools
+
+mcp_tools = await load_mcp_tools(session)
+agent = dura_agent(model="claude-sonnet-4-6", tools=mcp_tools)
+# ↑ MCP tools are BaseTool instances — auto-wrapped as DuraTool → dura__tool Activity
 ```
+
+> **Legacy:** `DuraMCPSession` and `MCPSessionRegistry` still exist but are superseded by the `langchain-mcp-adapters` pattern above.
 
 ---
 
@@ -151,48 +154,53 @@ This prevents unbounded ID growth in deep nesting and makes child workflows easy
 
 ---
 
-## Agent Tools
+## Agent Tools (Sub-Agents as Tools)
 
-`dura_agent_tool()` is the bridge between DuraLang's multi-agent model and LangChain's tool dispatch pattern. It wraps a `@dura` function as a real LangChain `BaseTool` — meaning sub-agents and regular tools can coexist in the exact same list, the same `bind_tools()` call, and the same `ainvoke()` dispatch loop.
+`dura_agent()` automatically detects `@dura` functions in its `tools` list and wraps them as LangChain `BaseTool` instances. This means sub-agents and regular tools coexist in the same list — no extra wrapping needed.
 
 ```python
-from duralang import dura, dura_agent_tool
+from duralang import dura, dura_agent
 
 @dura
 async def researcher(query: str) -> str:
     """Research agent — gathers information."""
     ...
 
-# Mix sub-agents and regular tools in one list
+# Mix sub-agents and regular tools in one list — dura_agent handles wrapping
 all_tools = [
-    dura_agent_tool(researcher),   # → Child Workflow
-    calculator,                     # → dura__tool Activity
+    researcher,    # @dura → auto-wrapped as agent tool → Child Workflow
+    calculator,    # @tool → auto-wrapped as DuraTool → dura__tool Activity
 ]
 ```
 
 ### How It Works Under the Hood
 
-1. `dura_agent_tool()` reads the function's **signature**, **type hints**, and **docstring**
-2. It generates a Pydantic `args_schema` and tool schema **automatically** (no manual schema authoring)
-3. It returns a `BaseTool` subclass whose `_arun()` calls the `@dura` function
-4. The `DuraToolProxy` detects the `__dura_agent_tool__` flag and **skips** `dura__tool` routing — the call goes directly to the `@dura` function, which the decorator routes as a Child Workflow
+1. `dura_agent()` detects the `__dura__` flag on the function
+2. It calls `dura_agent_tool()` internally, which reads the function's **signature**, **type hints**, and **docstring**
+3. It generates a Pydantic `args_schema` and tool schema **automatically** (no manual schema authoring)
+4. It returns a `BaseTool` subclass whose `_arun()` calls the `@dura` function
+5. `DuraTool` detects the `__dura_agent_tool__` flag and **skips** `dura__tool` routing — the call goes directly to the `@dura` function, which the decorator routes as a Child Workflow
 
 The result: **one dispatch pattern for everything.** The LLM sees a flat list of tools. DuraLang routes each call to the right Temporal primitive automatically.
 
 ---
 
-## Proxy Installation
+## How Interception Works
 
-DuraLang's interception mechanism is installed at **import time** — `import duralang` triggers `install_patches()`, which patches `BaseChatModel.__init__` and `BaseTool.__init__`.
+`dura_agent()` wraps your model and tools with durable subclasses at agent creation time:
 
-Every instance created after import has its `ainvoke()` method wrapped with a proxy function. The proxy checks `DuraContext.get()` on every call and routes accordingly.
+- `BaseChatModel` → `DuraModel` (delegates `_agenerate` through `dura__llm` Activity)
+- `BaseTool` → `DuraTool` (delegates `_arun` through `dura__tool` Activity)
+- `@dura` functions → agent tool via `dura_agent_tool()` (→ Child Workflow)
+
+Each wrapper checks `DuraContext.get()` on every call and routes accordingly.
 
 Key design decisions:
 
 | Decision | Why |
 |---|---|
-| **Method wrapping, not subclassing** | Works with any `BaseChatModel` or `BaseTool` subclass without knowing about it |
-| **`object.__setattr__`** | Bypasses Pydantic's field validation when setting the proxy method |
+| **Subclassing, not monkey-patching** | Clean composition — `DuraModel` wraps the inner LLM, `DuraTool` wraps the inner tool |
+| **Wrapping at `dura_agent()` time** | Explicit — only tools/models passed to `dura_agent()` are wrapped |
 | **ContextVar, not thread-local** | Correct behavior in async Python (`asyncio` tasks propagate ContextVars) |
 | **Check on every call** | Zero overhead outside `@dura` (single ContextVar lookup), full routing inside |
 

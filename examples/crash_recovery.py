@@ -31,11 +31,10 @@ import os
 import sys
 from pathlib import Path
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 # ── State tracking ───────────────────────────────────────────────────────────
 # File-based counter so tools can track attempts across retries and restarts.
@@ -129,7 +128,7 @@ def get_analyst_rating(ticker: str) -> str:
 @dura
 async def market_analyst(messages: list) -> list:
     """Market analysis agent with multiple tool calls."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[get_stock_price, analyze_sentiment, get_analyst_rating],
         system_prompt=(

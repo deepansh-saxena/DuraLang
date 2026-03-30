@@ -25,7 +25,7 @@ from duralang.graph_def import (
     WorkflowResult,
 )
 from duralang.registry import ToolRegistry
-from duralang.runner import _serialize_config
+from duralang.runner import _DURA_REGISTRY, _serialize_config
 from duralang.state import ArgSerializer, MessageSerializer
 from duralang.workflow import DuraLangWorkflow
 
@@ -65,6 +65,8 @@ async def simple_echo_agent(messages: list) -> list:
     In real use, LLM proxy would intercept ainvoke calls."""
     return messages
 
+simple_echo_agent.__dura__ = True
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -87,8 +89,19 @@ def _make_workflow_payload(
 @pytest.fixture(autouse=True)
 def clean_registries():
     ToolRegistry.clear()
+    # Register test functions so _resolve_callable accepts them
+    test_fns = [
+        f"{__name__}:simple_echo_agent",
+        f"{__name__}:context_checker",
+        f"{__name__}:failing_function",
+        f"{__name__}:adder",
+    ]
+    for fn_path in test_fns:
+        _DURA_REGISTRY.add(fn_path)
     yield
     ToolRegistry.clear()
+    for fn_path in test_fns:
+        _DURA_REGISTRY.discard(fn_path)
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
@@ -168,7 +181,7 @@ class TestWorkflowWithDuraContext:
         assert value["has_context"] is True
 
 
-# Must be module-level for workflow resolution
+# Must be module-level for workflow resolution — marked as @dura for _resolve_callable
 async def context_checker() -> dict:
     ctx = DuraContext.get()
     if ctx is None:
@@ -177,6 +190,8 @@ async def context_checker() -> dict:
         "has_context": True,
         "workflow_id_prefix": ctx.workflow_id[:10],
     }
+
+context_checker.__dura__ = True
 
 
 class TestWorkflowErrorHandling:
@@ -209,6 +224,8 @@ class TestWorkflowErrorHandling:
 async def failing_function():
     raise ValueError("intentional error")
 
+failing_function.__dura__ = True
+
 
 class TestArgSerializationEndToEnd:
     """Test that various argument types survive the Temporal boundary."""
@@ -240,3 +257,5 @@ class TestArgSerializationEndToEnd:
 
 async def adder(a: int, b: int) -> int:
     return a + b
+
+adder.__dura__ = True

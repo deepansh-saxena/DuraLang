@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from duralang.exceptions import MCPActivityError
@@ -21,7 +23,11 @@ async def mcp_activity(payload: MCPActivityPayload) -> MCPActivityResult:
             f"Set session.dura_server_name = '{payload.server_name}'."
         )
 
-    result = await session.call_tool(payload.tool_name, payload.arguments)
+    try:
+        result = await session.call_tool(payload.tool_name, payload.arguments)
+    except asyncio.CancelledError:
+        activity.heartbeat(f"mcp:{payload.server_name}:{payload.tool_name} cancelled — cleaning up")
+        raise
 
     activity.heartbeat(f"mcp:{payload.server_name}:{payload.tool_name} complete")
 

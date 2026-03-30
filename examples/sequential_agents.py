@@ -9,11 +9,10 @@ see multiagent_system.py.
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 # ── Tools ────────────────────────────────────────────────────────────────────
 
@@ -68,7 +67,7 @@ def format_report(title: str, sections: str) -> str:
 @dura
 async def researcher(topic: str) -> str:
     """Research agent — gathers information using web search and wikipedia."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[web_search, wikipedia_lookup],
         system_prompt=(
@@ -89,7 +88,7 @@ async def researcher(topic: str) -> str:
 @dura
 async def analyst(research_findings: str, question: str) -> str:
     """Analysis agent — processes research with calculations and code."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[calculator, code_interpreter],
         system_prompt=(
@@ -113,7 +112,7 @@ async def analyst(research_findings: str, question: str) -> str:
 @dura
 async def writer(research: str, analysis: str, topic: str) -> str:
     """Writer agent — combines research and analysis into a formatted report."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[format_report],
         system_prompt=(

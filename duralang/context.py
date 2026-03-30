@@ -18,6 +18,8 @@ class DuraContext:
     """Set in the ContextVar when user code executes inside a DuraLangWorkflow.
 
     Proxy objects read this to know how to route their calls.
+    Returns None in activity threads (by design) — activities run on the
+    Temporal worker's thread pool, not in the workflow event loop.
     """
 
     workflow_id: str

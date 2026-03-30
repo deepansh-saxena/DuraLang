@@ -13,7 +13,7 @@ DuraLangError                    ← Base exception for all DuraLang errors
 ├── ConfigurationError           ← Setup-time errors
 │   • Unknown LLM provider (not ChatAnthropic/ChatOpenAI/ChatGoogleGenerativeAI/ChatOllama)
 │   • Lambda or non-importable function decorated with @dura
-│   • Non-@dura function passed to dura_agent_tool()
+│   • Non-@dura function passed as agent tool to dura_agent()
 │
 ├── LLMActivityError             ← LLM inference failed after max retries
 │
@@ -122,7 +122,7 @@ For child workflow failures, the same pattern applies — a child workflow failu
 ```
 User's @dura function
   │
-  ├── llm.ainvoke() ──→ DuraLLMProxy ──→ dura__llm Activity
+  ├── llm.ainvoke() ──→ DuraModel ──→ dura__llm Activity
   │                                           │
   │                                    ┌──────┴──────┐
   │                                    │             │
@@ -134,7 +134,7 @@ User's @dura function
   │                              retries with    permanently
   │                              backoff
   │
-  ├── tool.ainvoke() ──→ DuraToolProxy ──→ dura__tool Activity
+  ├── tool.ainvoke() ──→ DuraTool ──→ dura__tool Activity
   │                                           │
   │                                    ┌──────┼──────┐
   │                                    │      │      │

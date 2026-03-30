@@ -22,6 +22,8 @@ class WorkflowResult:
 
     return_value: Any  # JSON-serialized return value
     error: str | None = None
+    error_type: str | None = None
+    error_traceback: str | None = None
 
 
 @dataclass
@@ -40,6 +42,7 @@ class LLMActivityResult:
 
     ai_message: dict  # serialized AIMessage
     content: str  # response content (always normalized to str)
+    error: str | None = None
 
 
 @dataclass

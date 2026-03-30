@@ -6,10 +6,9 @@ human input via Temporal Signals. Full implementation is planned for v2.
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 
 @dura
@@ -19,7 +18,7 @@ async def agent_with_confirmation(messages: list) -> list:
     In v2, this will use Temporal Signals to pause and wait for input.
     For now, this demonstrates the pattern.
     """
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         system_prompt="You are a helpful assistant that drafts content for review.",
     )

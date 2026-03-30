@@ -2,10 +2,9 @@
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 
 @dura
@@ -19,7 +18,7 @@ async def chat_agent(messages: list, provider: str = "anthropic") -> list:
     if model is None:
         raise ValueError(f"Unknown provider: {provider}")
 
-    agent = create_agent(model=model)
+    agent = dura_agent(model=model)
     result = await agent.ainvoke({"messages": messages})
     return result["messages"]
 

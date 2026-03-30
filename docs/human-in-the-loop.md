@@ -47,13 +47,12 @@ await handle.signal(DuraLangWorkflow.human_input, "Yes, proceed with the plan")
 Until the full signal-based flow is implemented in v2, you can achieve human-in-the-loop by splitting your workflow into two `@dura` functions:
 
 ```python
-from langchain.agents import create_agent
-from duralang import dura
+from duralang import dura, dura_agent
 
 @dura
 async def phase_1_gather(task: str) -> str:
     """First phase — gathers information and produces a proposal."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=research_tools,
     )

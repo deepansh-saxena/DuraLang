@@ -6,11 +6,10 @@ Each tool call becomes its own durable Temporal Activity.
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 
 @tool
@@ -27,7 +26,7 @@ def get_time(timezone: str) -> str:
 
 @dura
 async def multi_tool_agent(messages: list) -> list:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[get_weather, get_time],
     )

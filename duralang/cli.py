@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 import sys
 
 
@@ -57,8 +58,24 @@ async def _start_worker(host: str, namespace: str, task_queue: str):
         activities=[llm_activity, tool_activity, mcp_activity],
     )
 
+    shutdown_event = asyncio.Event()
+
+    def _request_shutdown():
+        print("\nShutting down worker...")
+        shutdown_event.set()
+
+    # Install signal handlers for clean shutdown
+    if sys.platform != "win32":
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _request_shutdown)
+
     print("Worker running. Press Ctrl+C to stop.")
-    await worker.run()
+    try:
+        async with worker:
+            await shutdown_event.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass  # Clean exit on Ctrl+C
 
 
 if __name__ == "__main__":

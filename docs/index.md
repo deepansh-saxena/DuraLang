@@ -29,7 +29,7 @@ DuraLang is the missing durability layer for LangChain. It intercepts every `llm
 | Capability | How |
 |---|---|
 | **One public API** | `@dura` — decorate your function, get durability |
-| **Multi-agent bridge** | `dura_agent_tool()` — wrap `@dura` as a `BaseTool` |
+| **Multi-agent bridge** | `dura_agent()` — pass `@dura` functions as tools (auto-wrapped) |
 | **Three durable routes** | `dura__llm` · `dura__tool` · `dura__mcp` |
 | **Hierarchical execution** | Child workflows when `@dura` calls `@dura` |
 | **Zero code change** | Your LangChain loop stays identical |

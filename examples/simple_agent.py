@@ -8,11 +8,10 @@ This is the simplest possible DuraLang example:
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from duralang import dura
+from duralang import dura, dura_agent
 
 
 @tool
@@ -28,7 +27,7 @@ def calculator(expression: str) -> str:
 @dura
 async def math_agent(task: str) -> str:
     """Simple math agent with a calculator tool."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[calculator],
         system_prompt="You are a math assistant. Use the calculator tool to evaluate expressions. Be concise.",

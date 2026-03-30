@@ -28,6 +28,11 @@ def dura(_fn=None, *, config: DuraConfig | None = None):
         fn.__dura__ = True
         fn.__dura_config__ = _config
 
+        # Register in _DURA_REGISTRY so _resolve_callable can validate
+        from duralang.runner import _DURA_REGISTRY, _get_fn_path
+        fn_path = _get_fn_path(fn)
+        _DURA_REGISTRY.add(fn_path)
+
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Extract DuraLang-specific kwargs before passing to the function

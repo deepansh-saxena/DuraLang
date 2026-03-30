@@ -1,8 +1,10 @@
 """DuraLang — Write normal LangChain code. Get Temporal durability. One decorator."""
 
-from duralang.agent_tool import dura_agent_tool
 from duralang.config import ActivityConfig, DuraConfig
 from duralang.decorator import dura
+from duralang.dura_agent import dura_agent
+from duralang.dura_model import DuraModel
+from duralang.dura_tool import DuraTool
 from duralang.exceptions import (
     ConfigurationError,
     DuraLangError,
@@ -12,11 +14,13 @@ from duralang.exceptions import (
     ToolActivityError,
     WorkflowFailedError,
 )
-from duralang.proxy import install_patches
+from duralang.proxy import _install_eager_task_patch
 from duralang.registry import MCPSessionRegistry
 
-# Install proxy patches at import time
-install_patches()
+# Install the eager_task_factory patch for Temporal + Python 3.12+ compatibility.
+# LangGraph uses asyncio.eager_task_factory which bypasses loop.create_task() —
+# this causes tasks to be garbage-collected on Temporal's workflow event loop.
+_install_eager_task_patch()
 
 
 class DuraMCPSession:
@@ -43,9 +47,11 @@ class DuraMCPSession:
 
 __all__ = [
     "dura",
-    "dura_agent_tool",
+    "dura_agent",
     "DuraConfig",
     "ActivityConfig",
+    "DuraModel",
+    "DuraTool",
     "DuraMCPSession",
     "DuraLangError",
     "ConfigurationError",

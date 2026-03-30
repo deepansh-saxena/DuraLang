@@ -86,7 +86,7 @@ This means the LLM can recover from its own mistakes (bad tool arguments) withou
 
 ### Agent Tool Bypass
 
-When `DuraToolProxy` detects the `__dura_agent_tool__` flag on a tool instance, it **skips** `dura__tool` routing entirely. The proxy calls the original `ainvoke()` directly, which calls `_arun()`, which calls the `@dura` function — routing it as a Temporal Child Workflow instead.
+When `DuraTool` detects the `__dura_agent_tool__` flag on the inner tool instance, it **skips** `dura__tool` routing entirely. It calls the inner tool's `ainvoke()` directly, which calls `_arun()`, which calls the `@dura` function — routing it as a Temporal Child Workflow instead.
 
 This means agent tools never appear in `dura__tool` activity logs. They appear as child workflows in the Temporal UI.
 

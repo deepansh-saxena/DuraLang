@@ -6,25 +6,25 @@ A complete technical walkthrough of how DuraLang makes LangChain agents durable 
 
 ## High-Level Overview
 
-DuraLang sits between your LangChain code and Temporal. It intercepts LLM calls, tool calls, and MCP calls at the method level and routes each one through a Temporal Activity or Child Workflow.
+DuraLang sits between your LangChain code and Temporal. It intercepts LLM calls and tool calls at the method level and routes each one through a Temporal Activity or Child Workflow.
+
+> **Note:** MCP tools from `langchain-mcp-adapters` are converted to standard `BaseTool` instances and go through the same `DuraTool` → `dura__tool` path as regular tools. No special MCP handling is needed.
 
 ```mermaid
 graph TB
     subgraph "Your Code (unchanged LangChain)"
         A["@dura<br/>async def my_agent(messages)"]
         B["llm.ainvoke(messages)"]
-        C["tool.ainvoke(input)"]
-        D["session.call_tool(...)"]
+        C["tool.ainvoke(input)<br/>(regular tools + MCP tools)"]
         E["await other_dura_fn(...)"]
-        AT["dura_agent_tool(fn).ainvoke(args)"]
+        AT["@dura fn as tool → ainvoke(args)"]
     end
 
     subgraph "DuraLang (transparent interception layer)"
         F["DuraRunner<br/>starts workflow"]
         G["DuraLangWorkflow<br/>sets DuraContext"]
-        H["DuraLLMProxy"]
-        I["DuraToolProxy"]
-        J["DuraMCPProxy"]
+        H["DuraModel"]
+        I["DuraTool"]
         K["Child Workflow routing"]
         AG["AgentTool<br/>(BaseTool → @dura)"]
     end
@@ -32,7 +32,6 @@ graph TB
     subgraph "Temporal (durable execution engine)"
         L["dura__llm Activity"]
         M["dura__tool Activity"]
-        N["dura__mcp Activity"]
         O["Child DuraLangWorkflow"]
         P["Event History<br/>durable state"]
     end
@@ -41,27 +40,23 @@ graph TB
     F -->|"start_workflow"| G
     G -->|"sets ContextVar"| H
     G -->|"sets ContextVar"| I
-    G -->|"sets ContextVar"| J
 
     B -->|"intercepted"| H
     C -->|"intercepted"| I
-    D -->|"intercepted"| J
     E -->|"detected"| K
     AT -->|"calls @dura fn"| AG
     AG -->|"detected"| K
 
     H -->|"execute_activity"| L
     I -->|"execute_activity"| M
-    J -->|"execute_activity"| N
     K -->|"execute_child_workflow"| O
 
     L --> P
     M --> P
-    N --> P
     O --> P
 ```
 
-**Key insight:** Your code (top layer) is unchanged LangChain. The DuraLang layer (middle) is completely transparent. Temporal (bottom) provides the durable execution guarantees.
+**Key insight:** Your code (top layer) is unchanged LangChain. The DuraLang layer (middle) is completely transparent. Temporal (bottom) provides the durable execution guarantees. MCP tools are handled identically to regular tools — `langchain-mcp-adapters` converts them to `BaseTool` instances, and `dura_agent()` wraps them as `DuraTool` like any other tool.
 
 ---
 
@@ -76,7 +71,7 @@ sequenceDiagram
     participant Runner as DuraRunner
     participant Temporal as Temporal Server
     participant Workflow as DuraLangWorkflow
-    participant Proxy as DuraLLMProxy
+    participant Proxy as DuraModel
     participant Activity as dura__llm
 
     User->>Decorator: await my_agent(messages)
@@ -126,9 +121,9 @@ When the LLM returns multiple tool calls and the user runs them with `asyncio.ga
 ```mermaid
 sequenceDiagram
     participant UserFn as User Function
-    participant LLMProxy as DuraLLMProxy
-    participant ToolProxy1 as DuraToolProxy (tool_1)
-    participant ToolProxy2 as DuraToolProxy (tool_2)
+    participant LLMProxy as DuraModel
+    participant ToolProxy1 as DuraTool (tool_1)
+    participant ToolProxy2 as DuraTool (tool_2)
     participant WF as DuraLangWorkflow
     participant T as Temporal Server
     participant A1 as dura__tool (tool_1)
@@ -172,7 +167,7 @@ sequenceDiagram
 
 ## Multi-Agent Flow — Child Workflows
 
-When a `@dura` function calls another `@dura` function (either directly or via `dura_agent_tool()`):
+When a `@dura` function calls another `@dura` function (either directly or as an agent tool):
 
 ```mermaid
 sequenceDiagram
@@ -220,41 +215,44 @@ sequenceDiagram
 
 ---
 
-## Proxy Interception — Decision Flow
+## Durable Wrapping — Decision Flow
 
-How the proxy decides whether to intercept or pass through:
+How `dura_agent()` wraps and how wrappers route calls:
 
 ```mermaid
 graph LR
-    subgraph "Import Time (one-time setup)"
-        A["import duralang"] --> B["install_patches()"]
-        B --> C["Patch BaseChatModel.__init__"]
-        B --> D["Patch BaseTool.__init__"]
-    end
-
-    subgraph "Instance Creation"
-        E["ChatAnthropic(model=...)"] --> F["Original __init__ runs"]
-        F --> G["_install_llm_proxy(instance)"]
-        G --> H["instance.ainvoke = proxy_fn"]
+    subgraph "Agent Creation (dura_agent)"
+        A["dura_agent(model, tools)"] --> B["Wrap model → DuraModel"]
+        A --> C["Wrap each tool"]
+        C --> D{"Tool type?"}
+        D -->|"@dura function"| E["dura_agent_tool() → BaseTool"]
+        D -->|"@tool / BaseTool"| F["DuraTool wrapper"]
+        D -->|"plain callable"| G["@tool → DuraTool"]
     end
 
     subgraph "Call Time (every ainvoke)"
-        H --> I{"DuraContext.get()"}
-        I -->|"None (outside @dura)"| J["Call original ainvoke<br/>(standard LangChain)"]
-        I -->|"Context exists (inside @dura)"| K{"__dura_agent_tool__?"}
-        K -->|"No (regular tool)"| L2["Route to dura__tool<br/>(Temporal Activity)"]
-        K -->|"Yes (agent tool)"| M2["Call @dura fn directly<br/>(Child Workflow)"]
+        H["DuraModel._agenerate()"] --> I{"DuraContext.get()"}
+        I -->|"None (outside @dura)"| J["Call inner LLM<br/>(standard LangChain)"]
+        I -->|"Context exists"| K["Route to dura__llm<br/>(Temporal Activity)"]
+
+        L["DuraTool._arun()"] --> M{"DuraContext.get()"}
+        M -->|"None"| N["Call inner tool<br/>(standard LangChain)"]
+        M -->|"Context exists"| O{"__dura_agent_tool__?"}
+        O -->|"No"| P["Route to dura__tool<br/>(Temporal Activity)"]
+        O -->|"Yes"| Q["Call @dura fn directly<br/>(Child Workflow)"]
     end
 
     style J fill:#d4edda
-    style L2 fill:#cce5ff
-    style M2 fill:#fff3cd
+    style N fill:#d4edda
+    style K fill:#cce5ff
+    style P fill:#cce5ff
+    style Q fill:#fff3cd
 ```
 
 **Three outcomes:**
-- 🟢 **Green:** Outside `@dura` — vanilla LangChain behavior (zero overhead)
-- 🔵 **Blue:** Regular tool inside `@dura` — routed to Temporal Activity
-- 🟡 **Yellow:** Agent tool inside `@dura` — routed to Child Workflow
+- **Green:** Outside `@dura` — vanilla LangChain behavior (zero overhead)
+- **Blue:** Regular tool/LLM inside `@dura` — routed to Temporal Activity
+- **Yellow:** Agent tool inside `@dura` — routed to Child Workflow
 
 ---
 
@@ -395,16 +393,17 @@ graph TD
 | Component | File | Role |
 |---|---|---|
 | `@dura` | `decorator.py` | Entry point — wraps user function, starts workflow or child workflow |
-| `dura_agent_tool()` | `agent_tool.py` | Wraps `@dura` function as `BaseTool` — agents and tools in same list |
-| `DuraContext` | `context.py` | `ContextVar` bridge — proxies read it to decide routing |
-| `DuraLLMProxy` | `proxy.py` | Intercepts `ainvoke()` on `BaseChatModel` → routes to `dura__llm` |
-| `DuraToolProxy` | `proxy.py` | Intercepts `ainvoke()` on `BaseTool` → routes to `dura__tool` (skips agent tools) |
-| `DuraMCPProxy` | `proxy.py` | Intercepts `call_tool()` on MCP sessions → routes to `dura__mcp` |
+| `dura_agent()` | `dura_agent.py` | Factory — wraps model+tools, delegates to `create_agent()` |
+| `DuraModel` | `dura_model.py` | `BaseChatModel` subclass — routes `_agenerate` to `dura__llm` |
+| `DuraTool` | `dura_tool.py` | `BaseTool` subclass — routes `_arun` to `dura__tool` (skips agent tools) |
+| `dura_agent_tool()` | `agent_tool.py` | Wraps `@dura` function as `BaseTool` (internal, called by `dura_agent`) |
+| `DuraContext` | `context.py` | `ContextVar` bridge — wrappers read it to decide routing |
+| `DuraMCPProxy` | `proxy.py` | **Legacy.** Intercepts `call_tool()` on MCP sessions → routes to `dura__mcp`. Superseded by `langchain-mcp-adapters` which converts MCP tools to `BaseTool` — they now go through `DuraTool` like regular tools. |
 | `DuraRunner` | `runner.py` | Temporal client/worker lifecycle — singleton per `(host, task_queue)` |
 | `DuraLangWorkflow` | `workflow.py` | Temporal workflow — sets context, resolves function, executes user code |
 | `dura__llm` | `activities/llm.py` | Activity — reconstructs LLM from identity, calls `ainvoke()` |
 | `dura__tool` | `activities/tool.py` | Activity — looks up tool in registry, calls `ainvoke()` |
-| `dura__mcp` | `activities/mcp.py` | Activity — looks up MCP session, calls `call_tool()` |
+| `dura__mcp` | `activities/mcp.py` | **Legacy.** Activity — looks up MCP session, calls `call_tool()`. MCP tools now go through `dura__tool` via `langchain-mcp-adapters`. |
 | `LLMIdentity` | `config.py` | Serializable LLM descriptor — crosses Temporal boundary |
 | `ArgSerializer` | `state.py` | Serializes function args for workflow payload |
 | `MessageSerializer` | `state.py` | Serializes LangChain messages for activity payloads |
@@ -419,10 +418,13 @@ graph TD
 
 ```
 duralang/
-├── __init__.py              # Exports: dura, dura_agent_tool, DuraConfig, DuraMCPSession
-├── decorator.py             # @dura — the entire public API
-├── proxy.py                 # DuraLLMProxy, DuraToolProxy, DuraMCPProxy, install_patches()
-├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool
+├── __init__.py              # Exports: dura, dura_agent, DuraConfig, DuraMCPSession
+├── decorator.py             # @dura — the primary public API
+├── dura_agent.py            # dura_agent() — wraps model+tools for durable dispatch
+├── dura_model.py            # DuraModel — BaseChatModel subclass for durable LLM calls
+├── dura_tool.py             # DuraTool — BaseTool subclass for durable tool calls
+├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool (internal)
+├── proxy.py                 # DuraMCPProxy (legacy — MCP tools now use DuraTool path)
 ├── context.py               # DuraContext — ContextVar-based workflow context
 ├── workflow.py              # DuraLangWorkflow — Temporal workflow definition
 ├── runner.py                # DuraRunner — Temporal client + worker lifecycle
@@ -430,7 +432,7 @@ duralang/
 │   ├── __init__.py          # Exports: llm_activity, tool_activity, mcp_activity
 │   ├── llm.py               # dura__llm — LLM inference activity
 │   ├── tool.py              # dura__tool — tool execution activity
-│   └── mcp.py               # dura__mcp — MCP call activity
+│   └── mcp.py               # dura__mcp — MCP call activity (legacy — MCP tools now use dura__tool)
 ├── graph_def.py             # Payload/Result dataclasses for Temporal
 ├── state.py                 # MessageSerializer + ArgSerializer
 ├── config.py                # DuraConfig, ActivityConfig, LLMIdentity

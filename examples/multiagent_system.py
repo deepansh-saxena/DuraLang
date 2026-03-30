@@ -9,17 +9,16 @@ sub-agents and regular tools available. The LLM freely decides:
 
 Each sub-agent has its own tools and its own agent loop. Under the hood:
   - Regular @tool calls → Temporal Activity (single retryable operation)
-  - dura_agent_tool() calls → Temporal Child Workflow (own event history)
+  - @dura function calls → Temporal Child Workflow (own event history)
   - LLM calls → Temporal Activity (retried, heartbeated)
 """
 
 import asyncio
 
-from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from duralang import dura, dura_agent_tool
+from duralang import dura, dura_agent
 
 # ── Regular tools ────────────────────────────────────────────────────────────
 
@@ -68,7 +67,7 @@ def format_document(title: str, body: str) -> str:
 @dura
 async def researcher(query: str) -> str:
     """Research agent — gathers information via web search and wikipedia."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[web_search, wikipedia_lookup],
         system_prompt=(
@@ -84,7 +83,7 @@ async def researcher(query: str) -> str:
 @dura
 async def analyst(data: str, question: str) -> str:
     """Analysis agent — analyzes data with calculations and trend identification."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[calculator],
         system_prompt=(
@@ -101,7 +100,7 @@ async def analyst(data: str, question: str) -> str:
 @dura
 async def writer(content: str, instructions: str) -> str:
     """Writer agent — produces formatted, polished documents."""
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[format_document],
         system_prompt=(
@@ -119,10 +118,10 @@ async def writer(content: str, instructions: str) -> str:
 # ── Orchestrator — sub-agents and regular tools in one list ───────────────────
 
 all_tools = [
-    dura_agent_tool(researcher),       # → Temporal Child Workflow
-    dura_agent_tool(analyst),          # → Temporal Child Workflow
-    dura_agent_tool(writer),           # → Temporal Child Workflow
-    calculator,                         # → Temporal Activity
+    researcher,       # @dura → Temporal Child Workflow (auto-wrapped by dura_agent)
+    analyst,          # @dura → Temporal Child Workflow (auto-wrapped by dura_agent)
+    writer,           # @dura → Temporal Child Workflow (auto-wrapped by dura_agent)
+    calculator,       # @tool → Temporal Activity (auto-wrapped by dura_agent)
 ]
 
 
@@ -134,7 +133,7 @@ async def orchestrator(task: str) -> str:
     individually durable: LLM calls, tool calls, and agent calls are all
     Temporal Activities or Child Workflows with automatic retry.
     """
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=all_tools,
         system_prompt=(

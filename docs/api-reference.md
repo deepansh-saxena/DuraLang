@@ -54,99 +54,64 @@ async def my_agent(messages: list) -> list:
 
 ---
 
-## `dura_agent_tool`
+## `dura_agent`
 
 ```python
-from duralang import dura_agent_tool
+from duralang import dura_agent
 ```
 
-Wraps a `@dura`-decorated function as a real LangChain `BaseTool` for use in `bind_tools()` and `ainvoke()`.
+Factory function that wraps a model and tools for durable dispatch. Returns a standard LangChain agent.
 
 ### Signature
 
 ```python
-def dura_agent_tool(
-    fn,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-) -> BaseTool
+def dura_agent(
+    model: str | BaseChatModel,
+    tools: list | None = None,
+    **kwargs,
+) -> CompiledGraph
 ```
 
 ### Parameters
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `fn` | Callable | *required* | A `@dura`-decorated async function. Raises `ConfigurationError` if the function doesn't have the `@dura` decorator. |
-| `name` | `str \| None` | `"call_{fn.__name__}"` | Override the tool name |
-| `description` | `str \| None` | Function docstring | Override the tool description |
+| `model` | `str \| BaseChatModel` | *required* | Model string (e.g. `"claude-sonnet-4-6"`) or a `BaseChatModel` instance. Wrapped with `DuraModel` automatically. |
+| `tools` | `list \| None` | `None` | Mix of `@tool` functions, `@dura` functions, or `BaseTool` instances. Each is wrapped automatically. |
+| `**kwargs` | | | Passed through to LangChain's `create_agent()` |
+
+### Tool Wrapping
+
+`dura_agent()` detects each tool type and wraps accordingly:
+
+| Input | Wrapped As | Temporal Primitive |
+|---|---|---|
+| `@tool` function / `BaseTool` | `DuraTool` | `dura__tool` Activity |
+| `@dura` function | Agent tool (via `dura_agent_tool()` internally) | Child Workflow |
+| Plain callable | `@tool` → `DuraTool` | `dura__tool` Activity |
 
 ### Returns
 
-A `BaseTool` instance with:
-
-| Attribute | Source |
-|---|---|
-| `name` | `"call_{fn.__name__}"` or overridden |
-| `description` | Function docstring or overridden |
-| `args_schema` | Pydantic model auto-generated from function signature and type hints |
-
-### Schema Generation
-
-`dura_agent_tool()` automatically generates the tool schema from the function's signature:
-
-```python
-@dura
-async def researcher(query: str) -> str:
-    """Research agent — gathers info via web search."""
-    ...
-
-tool = dura_agent_tool(researcher)
-# tool.name → "call_researcher"
-# tool.description → "Research agent — gathers info via web search."
-# tool.args_schema → Pydantic model with: query: str (required)
-```
-
-For functions with multiple parameters and defaults:
-
-```python
-@dura
-async def analyst(data: str, question: str, depth: int = 3) -> str:
-    """Analysis agent — processes data."""
-    ...
-
-tool = dura_agent_tool(analyst)
-# tool.args_schema → Pydantic model with:
-#   data: str (required)
-#   question: str (required)
-#   depth: int = 3 (optional)
-```
-
-### Routing
-
-When called via `ainvoke()` inside a `@dura` context:
-
-1. `DuraToolProxy` detects the `__dura_agent_tool__` flag on the tool instance
-2. **Skips** `dura__tool` activity routing
-3. Calls the original `ainvoke()` → `_arun()` → the `@dura` function
-4. The `@dura` wrapper detects the existing `DuraContext` and routes as a **Child Workflow**
-
-The sub-agent gets its own event history, timeouts, and retry boundaries. Failures in the sub-agent don't affect the parent.
+A compiled LangChain agent (`CompiledGraph`) — use `agent.ainvoke({"messages": ...})`.
 
 ### Example
 
 ```python
-from langchain.agents import create_agent
+from duralang import dura, dura_agent
+
+@dura
+async def researcher(query: str) -> str:
+    """Research sub-agent."""
+    ...
 
 all_tools = [
-    dura_agent_tool(researcher),   # → Child Workflow
-    dura_agent_tool(analyst),      # → Child Workflow
-    calculator,                     # → dura__tool Activity
+    researcher,    # @dura → Child Workflow (auto-wrapped)
+    calculator,    # @tool → dura__tool Activity (auto-wrapped)
 ]
 
 @dura
 async def orchestrator(task: str) -> str:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=all_tools,
     )
@@ -156,7 +121,39 @@ async def orchestrator(task: str) -> str:
 
 ---
 
-## `DuraMCPSession`
+## MCP Integration
+
+The recommended way to use MCP servers with duralang is via [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters). This converts MCP tools into standard LangChain `BaseTool` instances, which `dura_agent()` wraps automatically -- no special MCP handling needed.
+
+### Recommended Pattern
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from duralang import dura, dura_agent
+
+client = MultiServerMCPClient({
+    "filesystem": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    },
+})
+tools = await client.get_tools()
+
+@dura
+async def my_agent(messages):
+    agent = dura_agent("claude-sonnet-4-6", tools=tools)
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
+```
+
+MCP tools returned by `MultiServerMCPClient.get_tools()` are standard `BaseTool` instances. `dura_agent()` wraps them with `DuraTool` like any other tool, routing calls through the `dura__tool` Activity.
+
+---
+
+## `DuraMCPSession` (Legacy)
+
+> **Legacy.** The recommended approach for MCP integration is `langchain-mcp-adapters` (see above). `DuraMCPSession` is retained for backward compatibility but may be removed in a future release.
 
 ```python
 from duralang import DuraMCPSession
@@ -320,7 +317,7 @@ from duralang import (
 | Exception | When It's Raised |
 |---|---|
 | `DuraLangError` | Base class — catch this to handle all DuraLang errors |
-| `ConfigurationError` | Unknown LLM provider, lambda decorated with `@dura`, non-`@dura` function passed to `dura_agent_tool()` |
+| `ConfigurationError` | Unknown LLM provider, lambda decorated with `@dura`, non-`@dura` function passed as agent tool |
 | `LLMActivityError` | LLM inference failed after exhausting all retry attempts |
 | `ToolActivityError` | Tool not found in `ToolRegistry`, or tool execution failed after retries |
 | `MCPActivityError` | MCP server not found in `MCPSessionRegistry`, or call failed after retries |

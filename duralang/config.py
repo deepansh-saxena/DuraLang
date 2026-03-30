@@ -35,6 +35,9 @@ class DuraConfig:
     temporal_namespace: str = "default"
     task_queue: str = "duralang"
     max_iterations: int = 50
+    tls_client_cert: str | None = None
+    tls_client_key: str | None = None
+    tls_root_ca: str | None = None
     child_workflow_timeout: timedelta = field(
         default_factory=lambda: timedelta(hours=1)
     )
@@ -64,6 +67,15 @@ class DuraConfig:
     )
 
 
+# Safe fields to capture from LLM instances — anything NOT in this set is dropped
+_SAFE_LLM_KWARGS = {"temperature", "max_tokens", "top_p", "top_k", "timeout", "max_retries"}
+# Fields that must NEVER be serialized into Temporal event history
+_SENSITIVE_FIELDS = {
+    "api_key", "api_secret", "access_token", "api_token",
+    "openai_api_key", "anthropic_api_key",
+}
+
+
 @dataclass
 class LLMIdentity:
     """Serializable identifier for a BaseChatModel instance.
@@ -78,35 +90,49 @@ class LLMIdentity:
 
     @classmethod
     def from_instance(cls, instance) -> LLMIdentity:
-        """Inspects a BaseChatModel instance and extracts its identity."""
-        instance_type = type(instance).__name__
+        """Inspects a BaseChatModel instance and extracts its identity.
 
-        if instance_type == "ChatAnthropic":
-            return cls(
-                provider="anthropic",
-                model=instance.model,
-                kwargs={"temperature": getattr(instance, "temperature", None)},
-            )
-        elif instance_type == "ChatOpenAI":
-            return cls(
-                provider="openai",
-                model=getattr(instance, "model_name", instance.model),
-                kwargs={"temperature": getattr(instance, "temperature", None)},
-            )
-        elif instance_type == "ChatGoogleGenerativeAI":
-            return cls(
-                provider="google",
-                model=instance.model,
-                kwargs={"temperature": getattr(instance, "temperature", None)},
-            )
-        elif instance_type == "ChatOllama":
-            return cls(
-                provider="ollama",
-                model=instance.model,
-                kwargs={},
-            )
-        else:
-            raise ConfigurationError(
-                f"Cannot determine LLM provider from {instance_type}. "
-                f"Supported: ChatAnthropic, ChatOpenAI, ChatGoogleGenerativeAI, ChatOllama."
-            )
+        Uses isinstance() checks (not string matching on type name) so that
+        subclasses are correctly identified.
+        """
+        try:
+            from langchain_anthropic import ChatAnthropic
+            if isinstance(instance, ChatAnthropic):
+                return cls._extract("anthropic", "model", instance)
+        except ImportError:
+            pass
+        try:
+            from langchain_openai import ChatOpenAI
+            if isinstance(instance, ChatOpenAI):
+                return cls._extract("openai", "model_name", instance)
+        except ImportError:
+            pass
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            if isinstance(instance, ChatGoogleGenerativeAI):
+                return cls._extract("google", "model", instance)
+        except ImportError:
+            pass
+        try:
+            from langchain_ollama import ChatOllama
+            if isinstance(instance, ChatOllama):
+                return cls._extract("ollama", "model", instance)
+        except ImportError:
+            pass
+
+        raise ConfigurationError(
+            f"Cannot determine LLM provider from {type(instance).__name__}. "
+            f"Supported: ChatAnthropic, ChatOpenAI, ChatGoogleGenerativeAI, ChatOllama."
+        )
+
+    @classmethod
+    def _extract(cls, provider: str, model_attr: str, instance) -> LLMIdentity:
+        kwargs = {}
+        for key in _SAFE_LLM_KWARGS:
+            val = getattr(instance, key, None)
+            if val is not None:
+                kwargs[key] = val
+        # Defensive: strip any sensitive fields that slipped through
+        for f in _SENSITIVE_FIELDS:
+            kwargs.pop(f, None)
+        return cls(provider=provider, model=getattr(instance, model_attr), kwargs=kwargs)

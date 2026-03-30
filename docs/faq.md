@@ -8,11 +8,11 @@ Answers to common questions about DuraLang — how it works, when to use it, and
 
 ### What does `@dura` actually do?
 
-It wraps your async function so that when called, it starts a Temporal Workflow. Inside the workflow, proxy objects intercept `llm.ainvoke()`, `tool.ainvoke()`, and `session.call_tool()` — routing each call through a Temporal Activity with automatic retries, heartbeating, and state checkpointing. Outside of a `@dura` function, LangChain works exactly as normal — the proxies check for context and take the pass-through path.
+It wraps your async function so that when called, it starts a Temporal Workflow. Inside the workflow, proxy objects intercept `llm.ainvoke()` and `tool.ainvoke()` — routing each call through a Temporal Activity with automatic retries, heartbeating, and state checkpointing. Outside of a `@dura` function, LangChain works exactly as normal — the proxies check for context and take the pass-through path.
 
 ### Do I need to change my LangChain code?
 
-No. You add `@dura` to your function and `from duralang import dura`. Everything else stays the same — same tool loop, same message handling, same `ainvoke()` calls. For multi-agent systems, `dura_agent_tool()` wraps your `@dura` functions as `BaseTool` instances that fit into the standard LangChain tool dispatch pattern.
+No. You add `@dura` to your function, use `dura_agent()` instead of `create_agent()`, and `from duralang import dura, dura_agent`. Everything else stays the same — same tool loop, same message handling, same `ainvoke()` calls. For multi-agent systems, pass `@dura` functions directly in the `tools` list — `dura_agent()` wraps them automatically.
 
 ### Does `@dura` work with any LLM provider?
 
@@ -36,11 +36,11 @@ Temporal replays the workflow from its event history. **Completed activities are
 - No duplicate tool side-effects (for idempotent tools)
 - Execution resumes from the exact point of failure
 
-### What's the difference between `@dura` and `dura_agent_tool()`?
+### What's the difference between `@dura` and `dura_agent()`?
 
-`@dura` is the decorator that makes a function durable. `dura_agent_tool()` wraps a `@dura` function as a real LangChain `BaseTool` — so it can be used in `bind_tools()` and dispatched with `ainvoke()`, just like any regular tool.
+`@dura` is the decorator that makes a function durable — it wraps the function as a Temporal Workflow. `dura_agent()` is the factory that creates a LangChain agent with durable model and tool wrappers.
 
-Use `@dura` on every agent function. Use `dura_agent_tool()` only when you want the LLM to decide whether to invoke that agent (by presenting it as a tool).
+Use `@dura` on every agent function. Use `dura_agent()` inside `@dura` functions to create agents with automatic durable dispatch. Pass `@dura` functions directly in the `tools` list to use sub-agents as tools.
 
 ### Is duralang a replacement for LangChain?
 
@@ -58,14 +58,14 @@ Not to use duralang. The `@dura` decorator abstracts away all Temporal concepts.
 
 ## Architecture
 
-### How does interception work without changing my code?
+### How does interception work?
 
-DuraLang patches `BaseChatModel.__init__` and `BaseTool.__init__` at **import time** (`import duralang` triggers `install_patches()`). Every instance created afterward has its `ainvoke()` method wrapped with a proxy function that checks `DuraContext.get()`:
+`dura_agent()` wraps your model with `DuraModel` and your tools with `DuraTool` — these are `BaseChatModel` and `BaseTool` subclasses that check `DuraContext.get()` on every call:
 
 - `None` → outside `@dura` → calls the original method (standard LangChain behavior)
 - Context exists → inside `@dura` → routes to the appropriate Temporal Activity
 
-This is a one-time initialization cost. The per-call cost is a single `ContextVar` lookup (nanoseconds).
+The per-call cost is a single `ContextVar` lookup (nanoseconds).
 
 ### What is DuraContext?
 
@@ -79,24 +79,28 @@ Two mechanisms:
 
 1. **Direct calls:** If a `@dura` function calls another `@dura` function, the wrapper detects the existing `DuraContext` and routes to `workflow.execute_child_workflow()` — a Temporal Child Workflow with its own event history.
 
-2. **Agent tools:** `dura_agent_tool()` wraps a `@dura` function as a `BaseTool`. When called via `ainvoke()`, the proxy detects the `__dura_agent_tool__` flag and calls the `@dura` function directly — which routes as a Child Workflow (same as pattern 1).
+2. **Agent tools:** `dura_agent()` auto-wraps `@dura` functions as `BaseTool` instances. When called via `ainvoke()`, `DuraTool` detects the `__dura_agent_tool__` flag and calls the `@dura` function directly — which routes as a Child Workflow (same as pattern 1).
 
 ### Can I mix agent tools, regular tools, and MCP in the same agent?
 
-Yes. `dura_agent_tool()` returns a real `BaseTool`, so agent tools, regular `@tool` functions, and MCP calls all work alongside each other. The routing to the correct Temporal primitive (Child Workflow, `dura__tool` Activity, or `dura__mcp` Activity) happens automatically:
+Yes. Pass `@dura` functions, `@tool` functions, MCP tools (via `langchain-mcp-adapters`), and `BaseTool` instances in the same `tools` list — `dura_agent()` wraps each automatically. The routing to the correct Temporal primitive (Child Workflow or `dura__tool` Activity) happens automatically:
 
 ```python
+from langchain_mcp_adapters.tools import load_mcp_tools
+
+mcp_tools = await load_mcp_tools(session)  # MCP tools as BaseTool instances
+
 all_tools = [
-    dura_agent_tool(researcher),    # → Child Workflow
-    dura_agent_tool(writer),        # → Child Workflow
-    calculator,                      # → dura__tool Activity
+    researcher,    # @dura → Child Workflow
+    writer,        # @dura → Child Workflow
+    calculator,    # @tool → dura__tool Activity
+    *mcp_tools,    # MCP → dura__tool Activity (same as any BaseTool)
 ]
-# Plus: fs.call_tool(...)           # → dura__mcp Activity
 ```
 
 ### Do nested agent calls work?
 
-Yes, to any depth. Each `@dura` function at any nesting level gets its own Temporal workflow with its own event history. If agent A calls agent B (via `dura_agent_tool()`), and agent B calls agent C, each level is independently durable. A failure in C retries only C — A and B are unaffected.
+Yes, to any depth. Each `@dura` function at any nesting level gets its own Temporal workflow with its own event history. If agent A calls agent B, and agent B calls agent C, each level is independently durable. A failure in C retries only C — A and B are unaffected.
 
 Child workflow IDs are deterministic and prevent unbounded ID growth:
 
@@ -142,19 +146,20 @@ DuraLang needs to identify your LLM provider to reconstruct it inside the Activi
 
 **Supported:** `ChatAnthropic`, `ChatOpenAI`, `ChatGoogleGenerativeAI`, `ChatOllama`
 
-### "not a @dura function" error from `dura_agent_tool()`
+### "not a @dura function" error when passing a function as a tool
 
-The function passed to `dura_agent_tool()` must be decorated with `@dura` first:
+Functions passed in the `tools` list to `dura_agent()` that have the `__dura__` flag must be decorated with `@dura`. If you pass a plain async function that looks like an agent, decorate it first:
 
 ```python
 # ✗ Wrong — not decorated
 async def my_agent(query: str) -> str: ...
-tool = dura_agent_tool(my_agent)  # raises ConfigurationError
 
-# ✓ Correct — decorated first
+# ✓ Correct — decorated
 @dura
 async def my_agent(query: str) -> str: ...
-tool = dura_agent_tool(my_agent)  # works
+
+# Then pass directly to dura_agent
+agent = dura_agent(model="claude-sonnet-4-6", tools=[my_agent])
 ```
 
 ### "@dura cannot wrap lambda functions"

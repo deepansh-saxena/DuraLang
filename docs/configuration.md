@@ -31,7 +31,7 @@ config = DuraConfig(
 | `child_workflow_timeout` | `timedelta` | `1 hour` | Maximum execution time for child workflows (`@dura` calling `@dura`) |
 | `llm_config` | `ActivityConfig` | See below | Configuration for `dura__llm` activities |
 | `tool_config` | `ActivityConfig` | See below | Configuration for `dura__tool` activities |
-| `mcp_config` | `ActivityConfig` | See below | Configuration for `dura__mcp` activities |
+| `mcp_config` | `ActivityConfig` | See below | **Legacy.** Configuration for `dura__mcp` activities. MCP tools now go through `langchain-mcp-adapters` → `BaseTool` → `DuraTool` → `dura__tool`, so use `tool_config` instead |
 
 ### Usage
 
@@ -109,7 +109,7 @@ Each activity type has different default settings optimized for its typical work
 |---|---|---|---|---|
 | `dura__llm` | 10 min | 5 min | 3 | LLM calls can take 30–120s; generous timeout and heartbeat to avoid premature kills |
 | `dura__tool` | 2 min | 30s | 3 | Tools are typically fast; shorter timeout catches stuck operations sooner |
-| `dura__mcp` | 5 min | 30s | 3 | MCP calls vary; moderate timeout balances responsiveness and reliability |
+| `dura__mcp` *(legacy)* | 5 min | 30s | 3 | Legacy. MCP tools now use `langchain-mcp-adapters` and go through `dura__tool` instead |
 
 ### Customizing Per Activity Type
 
@@ -150,7 +150,7 @@ config = DuraConfig(
 )
 ```
 
-This applies to all child workflows started by the decorated function, including those triggered by `dura_agent_tool()`.
+This applies to all child workflows started by the decorated function, including those triggered by `@dura` functions passed as tools to `dura_agent()`.
 
 ---
 

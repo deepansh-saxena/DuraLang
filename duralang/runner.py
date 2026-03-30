@@ -7,6 +7,7 @@ Started lazily on first @dura invocation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -14,7 +15,14 @@ from duralang.config import DuraConfig
 from duralang.graph_def import WorkflowPayload, WorkflowResult
 from duralang.state import ArgSerializer
 
+logger = logging.getLogger(__name__)
+
 _runners: dict[str, DuraRunner] = {}
+_runners_lock = asyncio.Lock()
+
+# Registry of @dura-decorated function paths. Prevents arbitrary code execution
+# via crafted Temporal payloads (e.g. fn_path="os:system").
+_DURA_REGISTRY: set[str] = set()
 
 
 class DuraRunner:
@@ -29,15 +37,34 @@ class DuraRunner:
     @classmethod
     async def get_or_create(cls, config: DuraConfig) -> DuraRunner:
         key = f"{config.temporal_host}:{config.task_queue}"
-        if key not in _runners:
-            runner = cls(config)
-            await runner._start()
-            _runners[key] = runner
+        async with _runners_lock:
+            if key not in _runners:
+                runner = cls(config)
+                await runner._start()  # If this fails, runner NOT cached
+                _runners[key] = runner  # Only cache after successful start
         return _runners[key]
 
     @classmethod
     def clear(cls) -> None:
         """Clear all runners. Used in tests."""
+        _runners.clear()
+
+    async def shutdown(self) -> None:
+        """Gracefully shut down worker and client."""
+        if self._worker_task and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        key = f"{self.config.temporal_host}:{self.config.task_queue}"
+        _runners.pop(key, None)
+
+    @classmethod
+    async def shutdown_all(cls) -> None:
+        """Shut down all runners gracefully."""
+        for runner in list(_runners.values()):
+            await runner.shutdown()
         _runners.clear()
 
     async def _start(self) -> None:
@@ -47,9 +74,23 @@ class DuraRunner:
         from duralang.activities import llm_activity, mcp_activity, tool_activity
         from duralang.workflow import DuraLangWorkflow
 
+        tls_config = None
+        if self.config.tls_client_cert:
+            from pathlib import Path
+
+            from temporalio.client import TLSConfig
+
+            tls_config = TLSConfig(
+                client_cert=Path(self.config.tls_client_cert).read_bytes(),
+                client_private_key=Path(self.config.tls_client_key).read_bytes()
+                if self.config.tls_client_key
+                else b"",
+            )
+
         self._client = await Client.connect(
             self.config.temporal_host,
             namespace=self.config.temporal_namespace,
+            tls=tls_config,
         )
         self._worker = Worker(
             self._client,
@@ -58,6 +99,17 @@ class DuraRunner:
             activities=[llm_activity, tool_activity, mcp_activity],
         )
         self._worker_task = asyncio.create_task(self._worker.run())
+        self._worker_task.add_done_callback(self._on_worker_done)
+
+    def _on_worker_done(self, task: asyncio.Task) -> None:
+        """Handle worker task completion (crash recovery)."""
+        if task.cancelled():
+            logger.debug("DuraLang worker stopped")
+        elif task.exception():
+            logger.error(f"DuraLang worker crashed: {task.exception()}")
+        # Remove from cache so next call re-creates
+        key = f"{self.config.temporal_host}:{self.config.task_queue}"
+        _runners.pop(key, None)
 
     async def run(
         self, fn: Any, args: tuple, kwargs: dict, workflow_id: str | None = None
@@ -75,10 +127,14 @@ class DuraRunner:
         fn_path = _get_fn_path(fn)
         wf_id = workflow_id or f"duralang-{fn.__name__}-{uuid.uuid4().hex[:8]}"
 
+        serialized_args = ArgSerializer.serialize(args)
+        serialized_kwargs = ArgSerializer.serialize_kwargs(kwargs)
+        ArgSerializer.validate_payload_size(serialized_args, serialized_kwargs)
+
         payload = WorkflowPayload(
             fn_path=fn_path,
-            args=ArgSerializer.serialize(args),
-            kwargs=ArgSerializer.serialize_kwargs(kwargs),
+            args=serialized_args,
+            kwargs=serialized_kwargs,
             config_dict=_serialize_config(self.config),
         )
 
@@ -93,16 +149,21 @@ class DuraRunner:
         except Exception as e:
             # If workflow already exists (e.g. resuming after crash),
             # reconnect to the existing workflow handle.
-            if "already started" in str(e).lower():
-                handle = self._client.get_workflow_handle(wf_id)
+            from temporalio.exceptions import WorkflowAlreadyStartedError
+
+            if isinstance(e, WorkflowAlreadyStartedError):
+                handle = self._client.get_workflow_handle(
+                    wf_id, result_type=WorkflowResult
+                )
             else:
                 raise
 
         result: WorkflowResult = await handle.result()
-        if result.error:
+        if result.error or result.error_type:
             from duralang.exceptions import WorkflowFailedError
 
-            raise WorkflowFailedError(result.error)
+            error_msg = f"[{result.error_type}] {result.error}" if result.error_type else result.error
+            raise WorkflowFailedError(error_msg)
         return ArgSerializer.deserialize_result(result.return_value)
 
 
@@ -145,16 +206,43 @@ def _get_fn_path(fn: Any) -> str:
 def _resolve_callable(fn_path: str) -> Any:
     """Resolves 'my_module:my_agent' -> the original unwrapped function.
 
-    Important: getattr(module, name) returns the @dura wrapper. We must
-    unwrap via __wrapped__ to get the original function body, otherwise
-    the wrapper would see DuraContext is set and spawn infinite child workflows.
+    Validates that fn_path is in _DURA_REGISTRY to prevent arbitrary code
+    execution via crafted Temporal payloads. Then unwraps __wrapped__ to get
+    the original function body — without this, the wrapper would see
+    DuraContext is set and spawn infinite child workflows.
     """
     import importlib
 
-    module_path, fn_name = fn_path.split(":", 1)
-    module = importlib.import_module(module_path)
+    from duralang.exceptions import ConfigurationError
+
+    module_path, fn_name = fn_path.rsplit(":", 1)
+
+    # When run as `python script.py`, __main__ and the resolved module path
+    # (e.g. "examples.mcp_agent") are separate module objects with separate
+    # globals. Prefer __main__ when it maps to the same module — this ensures
+    # module-level state (e.g. MCP clients) set by the user is visible.
+    import sys
+
+    main_mod = sys.modules.get("__main__")
+    main_spec_name = getattr(getattr(main_mod, "__spec__", None), "name", None)
+    if main_mod and main_spec_name == module_path:
+        module = main_mod
+    else:
+        # Import the module — this triggers @dura decorators which
+        # register functions in _DURA_REGISTRY. Must happen before the check.
+        module = importlib.import_module(module_path)
+
+    if fn_path not in _DURA_REGISTRY:
+        raise ConfigurationError(
+            f"Function '{fn_path}' is not registered with @dura. "
+            f"Only @dura-decorated functions can be resolved."
+        )
     fn = getattr(module, fn_name)
-    # Unwrap the @dura decorator to get the original function
+
+    if not getattr(fn, "__dura__", False):
+        raise ConfigurationError(f"Function '{fn_path}' is not @dura-decorated.")
+
+    # Unwrap the @dura decorator to get the original function body
     return getattr(fn, "__wrapped__", fn)
 
 

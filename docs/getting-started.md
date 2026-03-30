@@ -57,17 +57,16 @@ Create a file called `my_agent.py`:
 
 ```python
 import asyncio
-from langchain.agents import create_agent
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage
-from duralang import dura
+from duralang import dura, dura_agent
 
 # Standard LangChain tool
 tools = [TavilySearchResults(max_results=3)]
 
 @dura  # ← This is the only DuraLang-specific line
 async def research_agent(messages: list) -> list:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=tools,
     )

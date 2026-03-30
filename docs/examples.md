@@ -42,14 +42,13 @@ python examples/basic_agent.py
 The simplest possible DuraLang agent. A standard LangChain agent loop — the only addition is `@dura` on the function definition.
 
 ```python
-from langchain.agents import create_agent
-from duralang import dura
+from duralang import dura, dura_agent
 
 tools = [TavilySearchResults(max_results=3)]
 
 @dura
 async def research_agent(messages: list) -> list:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=tools,
     )
@@ -68,20 +67,20 @@ async def research_agent(messages: list) -> list:
 
 **File:** [`examples/multi_tool.py`](../examples/multi_tool.py)
 
-Demonstrates parallel tool execution. When the LLM returns multiple tool calls, `create_agent` handles parallel dispatch automatically — each tool call runs as its own Temporal Activity, scheduled concurrently:
+Demonstrates parallel tool execution. When the LLM returns multiple tool calls, `dura_agent` handles parallel dispatch automatically — each tool call runs as its own Temporal Activity, scheduled concurrently:
 
 ```python
-from langchain.agents import create_agent
+from duralang import dura_agent
 
-agent = create_agent(
+agent = dura_agent(
     model="claude-sonnet-4-6",
     tools=tools,
 )
-# create_agent handles parallel tool calls automatically
+# dura_agent handles parallel tool calls automatically
 result = await agent.ainvoke({"messages": messages})
 ```
 
-**What to observe:** In the Temporal UI, parallel activities overlap in the timeline. Both complete independently — if one fails and retries, the other's result is already checkpointed. Note: `create_agent` handles parallel tool dispatch automatically — no manual `asyncio.gather` needed.
+**What to observe:** In the Temporal UI, parallel activities overlap in the timeline. Both complete independently — if one fails and retries, the other's result is already checkpointed. Note: `dura_agent` handles parallel tool dispatch automatically — no manual `asyncio.gather` needed.
 
 ---
 
@@ -121,15 +120,15 @@ async def chat_agent(messages: list, provider: str = "anthropic") -> list:
 
 ```python
 all_tools = [
-    dura_agent_tool(researcher),       # → Temporal Child Workflow
-    dura_agent_tool(analyst),          # → Temporal Child Workflow
-    dura_agent_tool(writer),           # → Temporal Child Workflow
-    calculator,                         # → Temporal Activity
+    researcher,    # @dura → Child Workflow (auto-wrapped by dura_agent)
+    analyst,       # @dura → Child Workflow (auto-wrapped by dura_agent)
+    writer,        # @dura → Child Workflow (auto-wrapped by dura_agent)
+    calculator,    # @tool → dura__tool Activity (auto-wrapped by dura_agent)
 ]
 
 @dura
 async def orchestrator(task: str) -> str:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=all_tools,
     )
@@ -168,18 +167,25 @@ async def pipeline_agent(topic: str) -> str:
 
 **File:** [`examples/mcp_agent.py`](../examples/mcp_agent.py)
 
-Integrates an MCP filesystem server using `DuraMCPSession`:
+Integrates an MCP filesystem server using `langchain-mcp-adapters`. MCP tools are converted to standard `BaseTool` instances and passed to `dura_agent()` — they go through `DuraTool` and the `dura__tool` Activity like any other tool:
 
 ```python
-fs = DuraMCPSession(session, "filesystem")  # ← one line
+from langchain_mcp_adapters.tools import load_mcp_tools
 
-@dura
-async def fs_agent(messages, fs):
-    tools_result = await fs.list_tools()           # passes through to MCP
-    result = await fs.call_tool("read_file", ...)  # → dura__mcp Activity
+async with mcp_server("filesystem", args=["path/to/dir"]) as session:
+    mcp_tools = await load_mcp_tools(session)
+
+    @dura
+    async def fs_agent(messages: list) -> list:
+        agent = dura_agent(
+            model="claude-sonnet-4-6",
+            tools=mcp_tools,       # MCP tools as BaseTool → dura__tool Activity
+        )
+        result = await agent.ainvoke({"messages": messages})
+        return result["messages"]
 ```
 
-**What to observe:** `dura__mcp` Activities appear in the Temporal UI with server name, tool name, and arguments.
+**What to observe:** MCP tool calls appear as `dura__tool` Activities in the Temporal UI — same as any other tool.
 
 ---
 

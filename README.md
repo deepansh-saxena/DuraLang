@@ -43,12 +43,11 @@ This is the reality of production agent systems today:
 ## The Solution
 
 ```python
-from langchain.agents import create_agent
-from duralang import dura  # ← only new import
+from duralang import dura, dura_agent  # ← only new imports
 
 @dura                       # ← only code change
 async def my_agent(messages):
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[TavilySearchResults(), calculator],
     )
@@ -56,7 +55,7 @@ async def my_agent(messages):
     return result["messages"]
 ```
 
-**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every LLM call and tool call inside `create_agent` is now a durable Temporal Activity — automatically retried, heartbeated, and recorded in Temporal's event history.
+**That's it.** The code above is identical to standard LangChain — except it cannot fail permanently. Every LLM call and tool call inside `dura_agent` is now a durable Temporal Activity — automatically retried, heartbeated, and recorded in Temporal's event history.
 
 > **The LLM is stochastic and decides everything.**
 > duralang does not change that.
@@ -117,7 +116,7 @@ The model decides the path at runtime, and **every chosen step is durable.** No 
 ```python
 @dura
 async def research_agent(messages):
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[web_search, calculator],
     )
@@ -125,21 +124,20 @@ async def research_agent(messages):
     return result["messages"]
 ```
 
-**Scale it up** — wrap `@dura` functions as tools with `dura_agent_tool()`, and you get durable multi-agent systems with the same pattern:
+**Scale it up** — pass `@dura` functions directly as tools to `dura_agent()`, and you get durable multi-agent systems with the same pattern:
 
 ```python
-from langchain.agents import create_agent
-from duralang import dura, dura_agent_tool
+from duralang import dura, dura_agent
 
 all_tools = [
-    dura_agent_tool(researcher),   # sub-agent (own event history)
-    dura_agent_tool(analyst),      # sub-agent (own event history)
-    calculator,                     # regular tool
+    researcher,    # @dura → Child Workflow (auto-wrapped by dura_agent)
+    analyst,       # @dura → Child Workflow (auto-wrapped by dura_agent)
+    calculator,    # @tool → dura__tool Activity (auto-wrapped by dura_agent)
 ]
 
 @dura
 async def orchestrator(task: str) -> str:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=all_tools,  # mix agents + tools freely
     )
@@ -161,7 +159,7 @@ orchestrator
 └── llm.ainvoke()                       ← durable
 ```
 
-Nesting works to any depth. Or skip `dura_agent_tool()` and call `@dura` functions directly — the decorator detects the context and routes as a child workflow automatically.
+Nesting works to any depth. You can also call `@dura` functions directly — the decorator detects the context and routes as a child workflow automatically.
 
 ---
 
@@ -236,12 +234,12 @@ Switch providers by changing one line. duralang automatically detects the provid
 
 ### ⚡ Parallel Tool Execution
 
-When the LLM returns multiple tool calls, `create_agent` executes them in parallel automatically. Each call becomes its own durable Temporal Activity:
+When the LLM returns multiple tool calls, `dura_agent` executes them in parallel automatically. Each call becomes its own durable Temporal Activity:
 
 ```python
 @dura
 async def my_agent(messages):
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[get_weather, get_time, calculator],  # multiple tools available
     )
@@ -254,21 +252,26 @@ async def my_agent(messages):
 
 ### 🕸️ Native MCP Support
 
-MCP (Model Context Protocol) servers are first-class citizens. Wrap once with `DuraMCPSession`, and every `call_tool()` becomes durable:
+MCP (Model Context Protocol) servers are first-class citizens. Use [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters) to convert MCP tools into standard LangChain tools, then pass them to `dura_agent()` -- every call becomes durable automatically:
 
 ```python
-from duralang import dura, DuraMCPSession
-from mcp import ClientSession
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from duralang import dura, dura_agent
 
-async with ClientSession(read, write) as session:
-    await session.initialize()
-    fs = DuraMCPSession(session, "filesystem")  # ← one line
+client = MultiServerMCPClient({
+    "filesystem": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    },
+})
+tools = await client.get_tools()
 
-    @dura
-    async def my_agent(messages):
-        result = await fs.call_tool("read_file", {"path": "/tmp/data.csv"})
-        # ← intercepted, durable (retried, heartbeated)
-        return result
+@dura
+async def my_agent(messages):
+    agent = dura_agent("claude-sonnet-4-6", tools=tools)
+    result = await agent.ainvoke({"messages": messages})
+    return result["messages"]
 ```
 
 ---
@@ -293,12 +296,12 @@ async with ClientSession(read, write) as session:
 
 You write normal LangChain code. duralang intercepts it transparently.
 
-When you `import duralang`, it patches `BaseChatModel` and `BaseTool` so that every instance created afterward has its `ainvoke()` method wrapped. Inside a `@dura` function, those calls are routed to Temporal. Outside `@dura`, they work exactly as normal LangChain.
+`dura_agent()` wraps your model and tools with durable subclasses (`DuraModel`, `DuraTool`) that check for `DuraContext` on every call. Inside a `@dura` function, those calls are routed to Temporal. Outside `@dura`, they pass through to the original LangChain implementation.
 
 ```python
 @dura
 async def my_agent(messages):
-    agent = create_agent(                                    # normal LangChain
+    agent = dura_agent(                                      # durable agent creation
         model="claude-sonnet-4-6",
         tools=[web_search, calculator],
     )
@@ -347,14 +350,13 @@ temporal server start-dev
 
 ```python
 import asyncio
-from langchain.agents import create_agent
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage
-from duralang import dura
+from duralang import dura, dura_agent
 
 @dura
 async def research_agent(messages: list) -> list:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[TavilySearchResults(max_results=3)],
     )
@@ -385,7 +387,7 @@ The [`examples/`](examples/) directory contains runnable demos:
 | [`multi_model.py`](examples/multi_model.py) | Same agent code with different LLM providers |
 | [`multiagent_system.py`](examples/multiagent_system.py) | Multi-agent orchestrator with mixed agent/tool dispatch |
 | [`sequential_agents.py`](examples/sequential_agents.py) | Sequential pipeline: research → analyze → write |
-| [`mcp_agent.py`](examples/mcp_agent.py) | MCP filesystem server with `DuraMCPSession` |
+| [`mcp_agent.py`](examples/mcp_agent.py) | MCP filesystem server with `langchain-mcp-adapters` |
 | [`crash_recovery.py`](examples/crash_recovery.py) | Automatic retry + process crash recovery demo |
 | [`human_in_loop.py`](examples/human_in_loop.py) | Human-in-the-loop pattern (v2 preview) |
 
@@ -395,17 +397,20 @@ The [`examples/`](examples/) directory contains runnable demos:
 
 ```
 duralang/
-├── __init__.py              # Exports: dura, dura_agent_tool, DuraConfig, DuraMCPSession
+├── __init__.py              # Exports: dura, dura_agent, DuraConfig
 ├── decorator.py             # @dura — the entire public API
-├── proxy.py                 # DuraLLMProxy, DuraToolProxy, DuraMCPProxy
-├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool
+├── dura_agent.py            # dura_agent() — wraps model+tools for durable dispatch
+├── dura_model.py            # DuraModel — BaseChatModel subclass for durable LLM calls
+├── dura_tool.py             # DuraTool — BaseTool subclass for durable tool calls
+├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool (internal)
+├── proxy.py                 # DuraMCPProxy (legacy — prefer langchain-mcp-adapters)
 ├── context.py               # DuraContext — ContextVar-based workflow context
 ├── workflow.py              # DuraLangWorkflow — Temporal workflow definition
 ├── runner.py                # DuraRunner — Temporal client + worker lifecycle
 ├── activities/
 │   ├── llm.py               # dura__llm — LLM inference activity
 │   ├── tool.py              # dura__tool — tool execution activity
-│   └── mcp.py               # dura__mcp — MCP call activity
+│   └── mcp.py               # dura__mcp — MCP call activity (legacy)
 ├── graph_def.py             # Payload/Result dataclasses for Temporal
 ├── state.py                 # MessageSerializer + ArgSerializer
 ├── config.py                # DuraConfig, ActivityConfig, LLMIdentity
@@ -435,27 +440,33 @@ async def my_agent(messages): ...
 - When called from within another `@dura` function → becomes a Child Workflow
 - When called from normal code → starts a new Temporal Workflow
 
-### `dura_agent_tool(fn)`
+### `dura_agent(model, tools, **kwargs)`
 
-Wraps a `@dura` function as a LangChain `BaseTool`.
-
-```python
-tool = dura_agent_tool(researcher)
-tool = dura_agent_tool(researcher, name="search", description="Search the web.")
-```
-
-- Auto-generates Pydantic `args_schema` from function signature
-- Returns a real `BaseTool` — compatible with `create_agent(tools=...)` and `bind_tools()`
-- Sub-agent calls get their own event history and retry boundaries
-
-### `DuraMCPSession(session, server_name)`
-
-Wraps an MCP `ClientSession` to enable durable `call_tool()`.
+Factory that wraps a model and tools for durable dispatch via LangChain's `create_agent`.
 
 ```python
-fs = DuraMCPSession(session, "filesystem")
-result = await fs.call_tool("read_file", {"path": "/tmp/data.csv"})
+agent = dura_agent(
+    model="claude-sonnet-4-6",          # string or BaseChatModel
+    tools=[web_search, researcher],      # mix @tool, @dura, BaseTool freely
+)
 ```
+
+- Wraps the model with `DuraModel` (routes `ainvoke` through `dura__llm` Activity)
+- Wraps tools with `DuraTool` (routes through `dura__tool` Activity)
+- `@dura` functions passed as tools are auto-wrapped as agent tools (→ Child Workflow)
+- Returns a standard LangChain agent — use `agent.ainvoke({"messages": ...})`
+
+### MCP Integration
+
+Use `langchain-mcp-adapters` to convert MCP tools into LangChain tools, then pass to `dura_agent()`:
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+tools = await MultiServerMCPClient({...}).get_tools()
+agent = dura_agent("claude-sonnet-4-6", tools=tools)
+```
+
+> `DuraMCPSession` is still available for legacy use. See [API Reference](docs/api-reference.md) for details.
 
 ### `DuraConfig`
 

@@ -26,12 +26,11 @@ async def my_agent(messages):
     return result["messages"]
 
 # After DuraLang — identical code, fully durable
-from langchain.agents import create_agent
-from duralang import dura
+from duralang import dura, dura_agent
 
 @dura                                          # <- the only change
 async def my_agent(messages):
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=[TavilySearchResults(), calculator],
     )
@@ -59,18 +58,15 @@ Wraps the user's async function. When called:
 
 The function signature is unchanged. Callers see a normal async function.
 
-### Layer 2: Proxy Injection
-Before the user's function body executes inside the workflow/worker,
-DuraLang installs proxy objects via `contextvars.ContextVar`:
+### Layer 2: Durable Wrapping via `dura_agent()`
+`dura_agent()` wraps the user's model and tools with durable subclasses:
 
-- Every `BaseChatModel` instance the user creates gets transparently
-  replaced by a `DuraLLMProxy` — same interface, `ainvoke` routes to `dura__llm` Activity
-- Every `BaseTool` instance gets transparently replaced by a `DuraToolProxy`
-  — same interface, `ainvoke` routes to `dura__tool` Activity
-  — **except** agent tools (created by `dura_agent_tool()`), which bypass
+- `BaseChatModel` → `DuraModel` — same interface, `_agenerate` routes to `dura__llm` Activity
+- `BaseTool` → `DuraTool` — same interface, `_arun` routes to `dura__tool` Activity
+  — **except** agent tools (`@dura` functions passed as tools), which bypass
     `dura__tool` and call the `@dura` function directly → Child Workflow
-- Every `mcp.ClientSession` gets transparently replaced by a `DuraMCPProxy`
-  — same interface, `call_tool` routes to `dura__mcp` Activity
+- MCP tools: use `langchain-mcp-adapters` to convert MCP tools to `BaseTool` →
+  passed to `dura_agent()` → wrapped as `DuraTool` → `dura__tool` Activity
 - Every `@dura`-decorated function called from within a dura context
   becomes a child workflow call
 
@@ -79,29 +75,29 @@ Underneath, the same three Activities and child workflow pattern:
 
 | Intercepted call | Temporal primitive |
 |---|---|
-| `BaseChatModel.ainvoke()` | Activity: `dura__llm` |
-| `BaseTool.ainvoke()` | Activity: `dura__tool` |
-| `dura_agent_tool(fn).ainvoke()` | Child Workflow (bypasses `dura__tool`) |
-| `ClientSession.call_tool()` | Activity: `dura__mcp` |
+| `DuraModel._agenerate()` | Activity: `dura__llm` |
+| `DuraTool._arun()` | Activity: `dura__tool` |
+| MCP tool (via `langchain-mcp-adapters`) | Activity: `dura__tool` (same as any `BaseTool`) |
+| `@dura` function as tool | Child Workflow (bypasses `dura__tool`) |
 | `@dura` function call from within dura | Child Workflow |
+| `DuraMCPProxy.call_tool()` *(legacy)* | Activity: `dura__mcp` |
 
 ---
 
-## 2. Multi-Agent via `dura_agent_tool()`
+## 2. Multi-Agent via `dura_agent()`
 
-`dura_agent_tool()` wraps a `@dura` function as a real LangChain `BaseTool`.
-This lets sub-agents and regular tools coexist in the same `create_agent(tools=...)`
-call. Any agent becomes an orchestrator the moment you add sub-agent tools
-to its toolkit.
+`dura_agent()` automatically wraps `@dura` functions passed in `tools` as
+LangChain `BaseTool` instances. Sub-agents and regular tools coexist in
+the same list. Any agent becomes an orchestrator the moment you add
+sub-agent functions to its toolkit.
 
 ```python
-from langchain.agents import create_agent
-from duralang import dura, dura_agent_tool
+from duralang import dura, dura_agent
 
 @dura
 async def researcher(query: str) -> str:
     """Research agent — gathers information via web search."""
-    agent = create_agent(model="claude-sonnet-4-6", tools=[TavilySearchResults()])
+    agent = dura_agent(model="claude-sonnet-4-6", tools=[TavilySearchResults()])
     result = await agent.ainvoke({"messages": [HumanMessage(content=query)]})
     return result["messages"][-1].content
 
@@ -110,16 +106,16 @@ async def analyst(data: str, question: str) -> str:
     """Analysis agent — runs calculations."""
     ...
 
-# Sub-agents + regular tools — same list, same dispatch
+# Sub-agents + regular tools — same list, dura_agent wraps each automatically
 all_tools = [
-    dura_agent_tool(researcher),   # → Child Workflow
-    dura_agent_tool(analyst),      # → Child Workflow
-    calculator,                     # → dura__tool Activity
+    researcher,    # @dura → Child Workflow (auto-wrapped)
+    analyst,       # @dura → Child Workflow (auto-wrapped)
+    calculator,    # @tool → dura__tool Activity (auto-wrapped)
 ]
 
 @dura
 async def orchestrator(task: str) -> str:
-    agent = create_agent(
+    agent = dura_agent(
         model="claude-sonnet-4-6",
         tools=all_tools,
     )
@@ -127,27 +123,28 @@ async def orchestrator(task: str) -> str:
     return result["messages"][-1].content
 ```
 
-How `dura_agent_tool()` works:
-1. Reads function signature, type hints, and docstring
-2. Generates Pydantic `args_schema` and tool schema automatically
-3. Returns a `BaseTool` with `__dura_agent_tool__ = True`
-4. `DuraToolProxy` detects the flag and skips `dura__tool` routing
-5. The tool's `_arun()` calls the `@dura` function directly → Child Workflow
+How it works internally:
+1. `dura_agent()` detects `@dura` functions via the `__dura__` flag
+2. Calls `dura_agent_tool()` internally — reads signature, type hints, docstring
+3. Generates Pydantic `args_schema` and tool schema automatically
+4. Returns a `BaseTool` with `__dura_agent_tool__ = True`
+5. `DuraTool` detects the flag and skips `dura__tool` routing
+6. The tool's `_arun()` calls the `@dura` function directly → Child Workflow
 
 ---
 
 ## 3. Goals & Non-Goals
 
 ### Goals
-- Zero new API — user writes identical LangChain code using `create_agent`
-- `@dura` decorator + `dura_agent_tool()` are the only new concepts
+- Zero new API — user writes identical LangChain code using `dura_agent`
+- `@dura` decorator + `dura_agent()` are the only new concepts
 - LLM calls, tool calls, MCP calls, agent calls all durably intercepted
-- Works with LangChain's `create_agent` — tool dispatch handled by LangChain
+- Works with `dura_agent` — tool dispatch handled by LangChain internally
 - Model-agnostic — any `BaseChatModel`
-- MCP-native — any `ClientSession`
+- MCP-native — via `langchain-mcp-adapters` (MCP tools become `BaseTool` → `dura__tool`)
 - Multi-agent — `@dura` functions calling other `@dura` functions = child workflows
-- `dura_agent_tool()` lets sub-agents and regular tools coexist in same list
-- Parallel tool calls preserved — handled by `create_agent` internally
+- `dura_agent()` auto-wraps sub-agents and regular tools in same list
+- Parallel tool calls preserved — handled by `dura_agent` internally
 - Python-only (v1)
 
 ### Non-Goals (v1)
@@ -161,10 +158,13 @@ How `dura_agent_tool()` works:
 
 ```
 duralang/
-├── __init__.py              # exports: dura, dura_agent_tool, DuraConfig, DuraMCPSession
+├── __init__.py              # exports: dura, dura_agent, DuraConfig
 ├── decorator.py             # @dura implementation
-├── proxy.py                 # DuraLLMProxy, DuraToolProxy, DuraMCPProxy
-├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool
+├── dura_agent.py            # dura_agent() — wraps model+tools for durable dispatch
+├── dura_model.py            # DuraModel — BaseChatModel subclass for durable LLM calls
+├── dura_tool.py             # DuraTool — BaseTool subclass for durable tool calls
+├── agent_tool.py            # dura_agent_tool() — wraps @dura as BaseTool (internal)
+├── proxy.py                 # DuraMCPProxy (legacy — MCP tools now use langchain-mcp-adapters → BaseTool → DuraTool)
 ├── context.py               # DuraContext — ContextVar-based workflow context
 ├── workflow.py              # DuraLangWorkflow (@workflow.defn)
 ├── runner.py                # DuraRunner — Temporal client + worker lifecycle
@@ -172,7 +172,7 @@ duralang/
 │   ├── __init__.py
 │   ├── llm.py               # dura__llm
 │   ├── tool.py              # dura__tool
-│   └── mcp.py               # dura__mcp
+│   └── mcp.py               # dura__mcp (legacy — MCP tools now go through dura__tool)
 ├── graph_def.py             # Payload/Result dataclasses for Temporal
 ├── state.py                 # MessageSerializer + ArgSerializer
 ├── config.py                # DuraConfig, ActivityConfig, LLMIdentity
@@ -186,27 +186,28 @@ duralang/
 
 ## 5. Non-Negotiable Rules for Claude Code
 
-1. **`@dura` is the primary public API.** `dura_agent_tool()` is the only
-   other public function. No `register_tools()`. No `runtime.run()`.
-   No `LLMConfig`. The user writes LangChain code. DuraLang intercepts it.
+1. **`@dura` + `dura_agent()` are the public API.** No `register_tools()`.
+   No `runtime.run()`. No `LLMConfig`. The user writes LangChain code.
+   DuraLang wraps and intercepts it.
 
-2. **Proxy passthrough when no context.** Every proxy method checks
-   `DuraContext.get()`. If `None`, calls the original method normally.
+2. **Passthrough when no context.** `DuraModel` and `DuraTool` check
+   `DuraContext.get()`. If `None`, call the inner model/tool normally.
    LangChain must work identically outside a dura context.
 
-3. **Agent tools bypass `dura__tool`.** When `DuraToolProxy` detects
-   `__dura_agent_tool__` on the instance, it calls the original `ainvoke`
+3. **Agent tools bypass `dura__tool`.** When `DuraTool` detects
+   `__dura_agent_tool__` on the inner tool, it calls the original `ainvoke`
    (which calls `_arun`, which calls the `@dura` function → Child Workflow).
    Agent tools never go through `dura__tool` activity.
 
-4. **Proxy installed at `__init__` time via method wrapping.** Not via
-   subclassing. Not via metaclass. Wrap the instance methods directly after
-   `__init__` completes using `BaseChatModel.__init__` patching.
+4. **Wrapping via subclassing, not monkey-patching.** `DuraModel` wraps
+   `BaseChatModel`, `DuraTool` wraps `BaseTool`. `dura_agent()` creates
+   these wrappers at agent creation time.
 
 5. **`DuraContext` via `contextvars.ContextVar`.** Never pass context
-   explicitly through function arguments. Proxy objects read it directly.
+   explicitly through function arguments. Wrapper objects read it directly.
 
-6. **Three activities only.** `dura__llm`, `dura__tool`, `dura__mcp`.
+6. **Two primary activities.** `dura__llm` and `dura__tool`. (`dura__mcp` is legacy —
+   MCP tools now go through `langchain-mcp-adapters` → `BaseTool` → `dura__tool`.)
 
 7. **Only the Workflow schedules activities and child workflows.**
 
@@ -217,9 +218,8 @@ duralang/
 
 10. **`LLMIdentity` not LLM object crosses serialization.**
 
-11. **Auto-register tools.** When `_extract_bound_tool_schemas` runs,
-    it registers every `BaseTool` in `ToolRegistry`. The user never
-    calls `register_tools()`.
+11. **Auto-register tools.** `DuraTool.__init__` registers the inner tool
+    in `ToolRegistry`. The user never calls `register_tools()`.
 
 12. **`workflow.now()` not `datetime.now()`** in all workflow code.
 
@@ -230,7 +230,8 @@ duralang/
 14. **`dura_agent_tool()` generates schemas from function signatures.**
     It reads type hints and docstrings. It returns a real `BaseTool`
     subclass via `pydantic.create_model`. No manual schema authoring.
+    Called internally by `dura_agent()`.
 
-15. **Use `create_agent` for tool-calling agents.** Examples and docs use
-    LangChain's `create_agent` for tool dispatch — never manual tool loops.
+15. **Use `dura_agent` for tool-calling agents.** Examples and docs use
+    `dura_agent` for tool dispatch — never manual tool loops.
     DuraLang intercepts the internal `ainvoke()` calls automatically.
