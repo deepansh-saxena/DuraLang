@@ -28,7 +28,7 @@ The model picked the right tool. The reasoning was correct. But a network timeou
 
 This is the reality of production agent systems today:
 
-- **LangChain** gives you the best composability layer for LLM applications. But it has no built-in answer for what happens when a call fails mid-run. Your agent restarts from scratch. Previous LLM calls (and their costs) are wasted.
+- **LangChain** gives you the best composability layer for LLM applications. But it does **not** provide built-in durability for long-running agent execution. If a call fails mid-run, execution typically fails unless you add your own recovery logic. Framework-level durable state persistence, checkpointed resume, and centralized retry/timeout policy management are not built in.
 
 - **LangGraph** solves this with graph-based checkpointing. But it requires restructuring your code into explicit nodes and edges. Free-form agent loops — where the LLM decides what to call, in what order, how many times — don't map cleanly to static graphs. You end up choosing between graph complexity or coarse checkpoints that don't protect individual operations.
 
