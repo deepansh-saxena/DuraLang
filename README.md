@@ -2,7 +2,7 @@
 
 <h1>duralang</h1>
 
-<p><strong>Agents that cannot fail. One decorator.</strong></p>
+<p><strong>Agents that cannot fail. One decorator. Make Agentic Stochastic Workflows Durable</strong></p>
 
 <p>
 <code>duralang</code> is the missing durability layer for LangChain.<br>
@@ -40,7 +40,7 @@ This is the reality of production agent systems today:
 
 - **LangChain** gives you the best composability layer for LLM applications. But it does **not** provide built-in durability for long-running agent execution. If a call fails mid-run, execution typically fails unless you add your own recovery logic. Framework-level durable state persistence, checkpointed resume, and centralized retry/timeout policy management are not built in.
 
-- **LangGraph** solves this with graph-based checkpointing. But it requires restructuring your code into explicit nodes and edges. Free-form agent loops — where the LLM decides what to call, in what order, how many times — don't map cleanly to static graphs. You end up choosing between graph complexity or coarse checkpoints that don't protect individual operations.
+- **LangGraph** solves this with graph-based checkpointing. But it requires restructuring your code into explicit nodes and edges, only suitable for deterministic workflows. Free-form agent loops — where the LLM decides what to call, in what order, how many times — don't map cleanly to static graphs. You end up choosing between graph complexity or coarse checkpoints that don't protect individual operations.
 
 - **Temporal** is the gold standard for durable execution. But using it with LLM agents requires you to manually define workflows, activities, serialization boundaries, and retry policies for every operation. It's powerful but high-ceremony — the opposite of what you want when iterating on agent logic.
 
