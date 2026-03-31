@@ -2,8 +2,7 @@
 
 <h1>duralang</h1>
 
-<p><strong>Agents that cannot fail. One decorator. Make Agentic Stochastic Workflows Durable</strong></p>
-
+<p><strong>Agents that cannot fail. One decorator. Durability for Stochastic AI Systems.</strong></p>
 <p>
 <code>duralang</code> is the missing durability layer for LangChain.<br>
 Write the same LangChain code you already know — add <code>@dura</code> — and every LLM call,<br> tool call, MCP call, and agent-to-agent call becomes individually recoverable,<br> automatically retried, and fully observable through Temporal.
@@ -26,13 +25,28 @@ Write the same LangChain code you already know — add <code>@dura</code> — an
 
 The model picked the right tool. The reasoning was correct. But a network timeout at minute 47 of a 60-minute run killed the entire pipeline — and you lost every completed step along with it.
 
-**Modern AI agents are stochastic systems.**  
-The LLM decides the execution path at runtime — what tools to call, in what order, and how many times.
+**Modern AI agents are stochastic programs.**
 
-**But durability frameworks assume deterministic workflows.**  
-They expect predefined graphs, fixed execution paths, and known structure ahead of time.
+They are not workflows.
+They are not pipelines.
+They are runtime-generated execution graphs driven by an LLM.
 
-**The result:** stochastic agent workflows today have **no native durability model.**
+**But every existing durability system is built for deterministic programs.**
+
+They assume:
+- a known execution graph
+- fixed control flow
+- predefined steps
+
+This assumption is fundamentally incompatible with LLM-driven agents.
+
+**The result:** **There is no durability model for stochastic programs.**
+
+Not in LangChain.
+Not in LangGraph.
+Not even in Temporal without rewriting everything.
+
+This is the missing layer.
 
 ---
 
