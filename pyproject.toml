@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "duralang"
-version = "0.1.0"
+version = "0.1.4"
 requires-python = ">=3.11"
 description = "Write normal LangChain code. Get Temporal durability. One decorator."
 readme = "README.md"
@@ -54,9 +54,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/deepanshsaxena/duralang"
-Repository = "https://github.com/deepanshsaxena/duralang"
-Documentation = "https://github.com/deepanshsaxena/duralang/tree/main/docs"
+Homepage = "https://github.com/deepansh-saxena/DuraLang"
+Repository = "https://github.com/deepansh-saxena/DuraLang"
+Documentation = "https://github.com/deepansh-saxena/DuraLang/tree/main/docs"
 
 [project.scripts]
 duralang = "duralang.cli:main"
