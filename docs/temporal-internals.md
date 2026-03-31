@@ -739,7 +739,4 @@ The risky code (random, time, network) should live in tools, not in the workflow
 
 ### The honest trade-off
 
-Temporal adds **~1.5-2.5x latency overhead** on fast tool calls and **significant
-operational complexity** (another service to run, monitor, and maintain). It's
-justified when the cost of *losing work* exceeds the cost of *slower work* — which
-is the case for production multi-agent systems running expensive, long-running tasks.
+Temporal adds latency overhead on fast tool calls and operational complexity (another service to run, monitor, and maintain). It's justified when the cost of losing work exceeds the cost of slower work — which is the case for production multi-agent systems running expensive, long-running tasks.
