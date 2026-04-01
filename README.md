@@ -17,6 +17,8 @@ Write the same LangChain code you already know — add <code>@dura</code> — an
 
 </div>
 
+https://github.com/deepansh-saxena/DuraLang/raw/main/DuraLang%20(3).mp4
+
 ---
 
 ## The Problem
